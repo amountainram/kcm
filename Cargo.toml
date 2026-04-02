@@ -1,0 +1,26 @@
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+[package]
+name = "kcm"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.102"
+clap = { version = "4.6.0", features = ["derive", "env"] }
+colored = "3.1.1"
+dirs = "6.0.0"
+rpassword = "7.4.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+ureq = { version = "3.3.0", default-features = false, features = [
+  "rustls",
+  "json",
+] }
