@@ -2,6 +2,8 @@ use cli::{Args, Commands, ContextCommands, Parser};
 pub use error::{Context, Error, Result};
 use std::{env, process::ExitCode};
 
+use crate::cli::AuthorizeCommands;
+
 mod cli;
 mod client;
 mod commands;
@@ -34,6 +36,16 @@ fn context_action(command: ContextCommands) -> Result<()> {
     }
 }
 
+fn authorize_action(command: AuthorizeCommands) -> Result<()> {
+    match command {
+        AuthorizeCommands::Status { context } => commands::authorize::status(context),
+        AuthorizeCommands::Login { context } => commands::authorize::login(context),
+        _ => {
+            todo!()
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let Args { command } = Args::parse();
 
@@ -43,6 +55,7 @@ fn main() -> ExitCode {
 
     let result = match command {
         Commands::Context { command } => context_action(command),
+        Commands::Authorize { command } => authorize_action(command),
     }
     .inspect_err(|error| {
         if tracing::enabled!(tracing::Level::DEBUG) {

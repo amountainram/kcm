@@ -85,12 +85,28 @@ pub enum ContextCommands {
 }
 
 #[derive(Subcommand)]
+pub enum AuthorizeCommands {
+    #[command(name = "login")]
+    Login { context: Option<String> },
+    #[command(name = "logout")]
+    Logout { context: Option<String> },
+    #[command(name = "status")]
+    Status { context: Option<String> },
+}
+
+#[derive(Subcommand)]
 pub enum Commands {
     /// Manage CLI contexts
-    #[command(name = "context")]
+    #[command(name = "context", alias = "ctx")]
     Context {
         #[command(subcommand)]
         command: ContextCommands,
+    },
+    /// Manage CLI contexts
+    #[command(name = "authorize", alias = "auth")]
+    Authorize {
+        #[command(subcommand)]
+        command: AuthorizeCommands,
     },
 }
 

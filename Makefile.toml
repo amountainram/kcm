@@ -1,0 +1,25 @@
+[env]
+docker_compose_file = ".dev/docker-compose.yml"
+COMPOSE_PROJECT_NAME = "kcm"
+
+[config]
+default_to_workspace = false
+
+[tasks.dev_up]
+description = "Start all development services"
+script = '''
+    docker compose -f ${docker_compose_file} up -d --wait
+    docker compose -f ${docker_compose_file} ps
+'''
+
+[tasks.dev_down]
+description = "Stop all development services"
+script = '''
+    docker compose -f ${docker_compose_file} down "${@}"
+'''
+
+[tasks.dc]
+description = "Proxy for docker compose commands. Usage: cargo make dc -- [docker compose args]"
+script = '''
+    docker compose -f ${docker_compose_file} ${@}
+'''
