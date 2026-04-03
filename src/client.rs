@@ -171,4 +171,38 @@ impl RealmClient {
             );
         })
     }
+
+    pub fn refresh(
+        &self,
+        refresh_token: &str,
+    ) -> Result<keycloak::AuthAccessToken> {
+        let keycloak::OpenidConfiguration {
+            token_endpoint, ..
+        } = self.openid_configuration()?;
+        let res = ureq::post(&token_endpoint)
+            .content_type(
+                mime::APPLICATION_WWW_FORM_URLENCODED
+                    .essence_str(),
+            )
+            .send_form([
+                ("grant_type", "refresh_token"),
+                ("client_id", "admin-cli"),
+                ("refresh_token", refresh_token),
+            ])
+            .inspect_err(|error| {
+                error!(
+                    ?error,
+                    endpoint = token_endpoint,
+                    "http failure"
+                )
+            })?;
+        let res = handle_response(res)?;
+        as_json(res).inspect_err(|error| {
+            error!(
+                ?error,
+                endpoint = token_endpoint,
+                "failed to deserialize refreshed token"
+            );
+        })
+    }
 }

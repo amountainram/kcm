@@ -1,4 +1,7 @@
-use super::{Config, Context, current_context, load_config, save_config};
+use super::{
+    Config, Context, current_context,
+    load_config, save_config,
+};
 use crate::{Context as _, Error, Result, cli::OutputFormat};
 use std::{
     io::{self, IsTerminal, Write},
@@ -196,22 +199,27 @@ pub fn create(
     }
 
     let password = resolve_password(password)
-        .with_context(|| "while reading password")?
-        .map(Into::into);
+        .with_context(|| "while reading password")?;
+
+    let mut ctx = Context {
+        server_url,
+        realm,
+        username,
+        password: None,
+        token: None,
+    };
+
+    if let Some(pw) = password {
+        ctx.set_password(&name, &pw)?;
+    }
+    if let Some(tok) = token {
+        ctx.set_token(&name, &tok)?;
+    }
 
     if current {
         let _ = config.current_context.insert(name.clone());
     }
-    config.contexts.insert(
-        name.clone(),
-        Context {
-            server_url,
-            realm,
-            username,
-            password,
-            token: token.map(Into::into),
-        },
-    );
+    config.contexts.insert(name.clone(), ctx);
 
     save_config(&config).with_context(|| "while saving configuration")?;
 
@@ -245,8 +253,7 @@ pub fn update(
     };
     if let Some(entry) = contexts.get_mut(&name) {
         let password = resolve_password(password)
-            .with_context(|| "while reading password")?
-            .map(Into::into);
+            .with_context(|| "while reading password")?;
 
         if current {
             let _ = current_context.insert(name.clone());
@@ -260,11 +267,11 @@ pub fn update(
         if let Some(username) = username {
             let _ = entry.username.insert(username);
         }
-        if let Some(password) = password {
-            let _ = entry.password.insert(password);
+        if let Some(pw) = password {
+            entry.set_password(&name, &pw)?;
         }
-        if let Some(token) = token {
-            let _ = entry.token.insert(token.into());
+        if let Some(tok) = token {
+            entry.set_token(&name, &tok)?;
         }
 
         save_config(&Config {
@@ -295,7 +302,9 @@ pub fn delete(yes: bool, name: String) -> Result<()> {
     if config.current_context.as_ref() == Some(&name) {
         config.current_context.take();
     }
-    if config.contexts.remove(&name).is_none() {
+    if let Some(ctx) = config.contexts.remove(&name) {
+        ctx.delete_secrets()?;
+    } else {
         let error = Error::msg("context not found");
         error!(name, ?error, "context not found");
         return Err(error);
