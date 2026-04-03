@@ -1,0 +1,59 @@
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:${KEYCLOAK_VERSION:-latest}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+    ports:
+      - "${KC_PORT:-8080}:8080"
+    volumes:
+      - ./keycloak/healthcheck.sh:/healthcheck.sh:ro
+    environment:
+      - KC_BOOTSTRAP_ADMIN_USERNAME=admin
+      - KC_BOOTSTRAP_ADMIN_PASSWORD=change_me
+      - KC_DB=postgres
+      - KC_DB_USERNAME=keycloak_user
+      - KC_DB_PASSWORD=""
+      - KC_DB_URL=jdbc:postgresql://postgres:5432/keycloak
+    command: [
+      "start-dev",
+      "--http-enabled=true",
+      "--health-enabled=true",
+    ]
+    healthcheck:
+      test: ["CMD-SHELL", "/healthcheck.sh || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: docker.io/postgres:${POSTGRES_VERSION:-latest}
+    ports:
+      - "5432:5432"
+    networks:
+      - internal
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-}
+      - POSTGRES_DB=${POSTGRES_DB:-postgres}
+      - POSTGRES_HOST_AUTH_METHOD=trust
+    restart: unless-stopped
+    volumes:
+      - ./postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready"]
+      interval: 2s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+
+networks:
+  internal:
