@@ -53,6 +53,95 @@ pub struct Context {
     pub token: Option<Sensitive>,
 }
 
+const KEYRING_SERVICE: &str = "kcm";
+
+impl Context {
+    fn keyring_entry(name: &str, field: &str) -> Result<keyring::Entry> {
+        let key = format!("{name}/{field}");
+        keyring::Entry::new(KEYRING_SERVICE, &key)
+            .map_err(|e| Error::msg(format!("keyring error: {e}")))
+    }
+
+    fn keyring_read(key: &str) -> Result<Option<String>> {
+        let entry = keyring::Entry::new(KEYRING_SERVICE, key)
+            .map_err(|e| Error::msg(format!("keyring error: {e}")))?;
+        match entry.get_password() {
+            Ok(s) => Ok(Some(s)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(Error::msg(format!("failed to read from keyring: {e}"))),
+        }
+    }
+
+    fn keyring_remove(key: &str) -> Result<()> {
+        let entry = keyring::Entry::new(KEYRING_SERVICE, key)
+            .map_err(|e| Error::msg(format!("keyring error: {e}")))?;
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(Error::msg(format!("failed to delete from keyring: {e}"))),
+        }
+    }
+
+    pub fn set_password(&mut self, name: &str, value: &str) -> Result<()> {
+        let entry = Self::keyring_entry(name, "password")?;
+        entry
+            .set_password(value)
+            .map_err(|e| Error::msg(format!("failed to store password in keyring: {e}")))?;
+        self.password = Some(Sensitive::from(format!("{name}/password")));
+        Ok(())
+    }
+
+    pub fn get_password(&self) -> Result<Option<String>> {
+        match &self.password {
+            Some(key_ref) => Self::keyring_read(key_ref.read()),
+            None => Ok(None),
+        }
+    }
+
+    pub fn set_token(&mut self, name: &str, value: &str) -> Result<()> {
+        let entry = Self::keyring_entry(name, "token")?;
+        entry
+            .set_password(value)
+            .map_err(|e| Error::msg(format!("failed to store token in keyring: {e}")))?;
+        self.token = Some(Sensitive::from(format!("{name}/token")));
+        Ok(())
+    }
+
+    pub fn delete_token(&self) -> Result<()> {
+        if let Some(key_ref) = &self.token {
+            Self::keyring_remove(key_ref.read())?;
+        }
+        Ok(())
+    }
+
+    pub fn get_token(&self) -> Result<Option<String>> {
+        match &self.token {
+            Some(key_ref) => Self::keyring_read(key_ref.read()),
+            None => Ok(None),
+        }
+    }
+
+    pub fn delete_secrets(&self) -> Result<()> {
+        if let Some(key_ref) = &self.password {
+            Self::keyring_remove(key_ref.read())?;
+        }
+        if let Some(key_ref) = &self.token {
+            Self::keyring_remove(key_ref.read())?;
+        }
+        Ok(())
+    }
+
+    pub fn resolved(&self) -> Result<Self> {
+        let mut copy = self.clone();
+        if let Some(pw) = self.get_password()? {
+            copy.password = Some(pw.into());
+        }
+        if let Some(tok) = self.get_token()? {
+            copy.token = Some(tok.into());
+        }
+        Ok(copy)
+    }
+}
+
 #[derive(Default, Deserialize, Serialize)]
 struct Config {
     #[serde(

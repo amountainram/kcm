@@ -31,6 +31,15 @@ ureq = { version = "3.3.0", default-features = false, features = [
     "json",
 ] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6.3", features = ["linux-native", "crypto-rust"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.6.3", features = ["apple-native", "crypto-rust"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3.6.3", features = ["windows-native", "crypto-rust"] }
+
 [build-dependencies]
 openapiv3 = "2.2.0"
 schemars = "0.8.22"

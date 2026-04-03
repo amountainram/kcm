@@ -44,9 +44,7 @@ fn authorize_action(command: AuthorizeCommands) -> Result<()> {
             format,
         } => commands::authorize::status(context, realm, format),
         AuthorizeCommands::Login { context, realm } => commands::authorize::login(context, realm),
-        _ => {
-            todo!()
-        }
+        AuthorizeCommands::Logout { context } => commands::authorize::logout(context),
     }
 }
 

@@ -11,7 +11,7 @@ use std::{
     fmt,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tracing::error;
+use tracing::{debug, error};
 
 const LABEL_WIDTH: usize = 20;
 
@@ -57,6 +57,17 @@ fn fmt_relative(secs: i64) -> String {
     }
 }
 
+pub fn logout(name: Option<String>) -> Result<()> {
+    let (name, ctx, mut config) = load_context_or_current(name.as_deref())?;
+
+    ctx.delete_token()?;
+    config.contexts.entry(name).insert_entry(ctx);
+
+    println!("logged out!");
+
+    save_config(&config)
+}
+
 pub fn login(name: Option<String>, realm: String) -> Result<()> {
     let (name, mut ctx, mut config) = load_context_or_current(name.as_deref())?;
 
@@ -64,23 +75,74 @@ pub fn login(name: Option<String>, realm: String) -> Result<()> {
         Some(s) => s.clone(),
         None => {
             println!(
-                r#"cannot find server-url on current context. use "context update --server-url <url>""#
+                "cannot find server-url on current \
+                 context. use \"context update \
+                 --server-url <url>\""
             );
             return Err(Error::msg("missing server-url"));
         }
     };
 
+    // 1. check existing token
+    if let Some(stored) = ctx.get_token()? {
+        if let Ok(auth) = serde_json::from_str::<keycloak::AuthAccessToken>(&stored) {
+            let now = now_epoch();
+            let iat = token_iat(&auth.access_token).unwrap_or(now);
+
+            // still valid → nothing to do
+            if iat + auth.expires_in > now {
+                debug!("access token still valid");
+                println!("already logged in!");
+                return Ok(());
+            }
+
+            // 2. try refresh
+            if let Some(ref rt) = auth.refresh_token {
+                let refresh_ok = auth.refresh_expires_in.is_none_or(|rei| iat + rei > now);
+
+                if refresh_ok {
+                    debug!("refreshing access token");
+                    let resolved = ctx.resolved()?;
+                    let client = RealmClient::builder()
+                        .server_url(server_url.clone())
+                        .realm(realm.clone())
+                        .context(resolved)
+                        .build();
+
+                    match client.refresh(rt) {
+                        Ok(token) => {
+                            ctx.set_token(&name, &serde_json::to_string(&token)?)?;
+                            config.contexts.entry(name).insert_entry(ctx);
+                            println!("refreshed!");
+                            return save_config(&config);
+                        }
+                        Err(e) => {
+                            debug!(
+                                ?e,
+                                "refresh failed, \
+                                 falling back to \
+                                 password grant"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. full password grant
+    let resolved = ctx.resolved()?;
     let client = RealmClient::builder()
         .server_url(server_url)
         .realm(realm)
-        .context(ctx.clone())
+        .context(resolved)
         .build();
 
     let token = client.token().inspect_err(|error| {
         error!(?error, "failed to retrieve access token");
     })?;
 
-    let _ = ctx.token.insert(serde_json::to_string(&token)?.into());
+    ctx.set_token(&name, &serde_json::to_string(&token)?)?;
     config.contexts.entry(name).insert_entry(ctx);
 
     println!("logged in!");
@@ -88,17 +150,31 @@ pub fn login(name: Option<String>, realm: String) -> Result<()> {
     save_config(&config)
 }
 
+fn token_iat(jwt: &str) -> Option<i64> {
+    #[derive(serde::Deserialize)]
+    struct Claims {
+        iat: Option<i64>,
+    }
+    let payload = jwt.split('.').nth(1)?;
+    let bytes = BASE64_URL_SAFE_NO_PAD.decode(payload).ok()?;
+    let claims = serde_json::from_slice::<Claims>(&bytes).ok()?;
+    claims.iat
+}
+
 pub fn status(name: Option<String>, realm: String, format: OutputFormat) -> Result<()> {
     let (_, ctx, _) = load_context_or_current(name.as_deref())?;
-    let (token, refresh_expires_in) = match &ctx.token {
-        Some(x) => {
-            let token = x.read().to_string();
+    let (token, refresh_expires_in) = match ctx.get_token()? {
+        Some(token_json) => {
             let keycloak::AuthAccessToken {
                 access_token,
                 refresh_expires_in,
                 ..
-            } = serde_json::from_str(&token).inspect_err(|error| {
-                error!(?error, "failed to deserialized stored access token");
+            } = serde_json::from_str(&token_json).inspect_err(|error| {
+                error!(
+                    ?error,
+                    "failed to deserialize stored \
+                         access token"
+                );
             })?;
             (access_token, refresh_expires_in)
         }
@@ -130,7 +206,7 @@ pub fn status(name: Option<String>, realm: String, format: OutputFormat) -> Resu
     let client = RealmClient::builder()
         .server_url(server_url)
         .realm(realm)
-        .context(ctx)
+        .context(ctx.resolved()?)
         .build();
 
     let jwks = client.jwks()?;
