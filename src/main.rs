@@ -31,15 +31,19 @@ fn context_action(command: ContextCommands) -> Result<()> {
         } => commands::context::update(name, current, server_url, realm, username, password, token),
         ContextCommands::Delete { yes, name } => commands::context::delete(yes, name),
         ContextCommands::Use { name } => commands::context::r#use(name),
-        ContextCommands::Show => commands::context::show(),
-        ContextCommands::List => commands::context::list(),
+        ContextCommands::Show { format } => commands::context::show(format),
+        ContextCommands::List { format } => commands::context::list(format),
     }
 }
 
 fn authorize_action(command: AuthorizeCommands) -> Result<()> {
     match command {
-        AuthorizeCommands::Status { context } => commands::authorize::status(context),
-        AuthorizeCommands::Login { context } => commands::authorize::login(context),
+        AuthorizeCommands::Status {
+            context,
+            realm,
+            format,
+        } => commands::authorize::status(context, realm, format),
+        AuthorizeCommands::Login { context, realm } => commands::authorize::login(context, realm),
         _ => {
             todo!()
         }
@@ -105,7 +109,7 @@ fn logger_try_init() -> Result<()> {
 
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::try_from_default_env()?)
-        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
         .try_init()
         .with_context(|| "failed to initialize logger")?;
 

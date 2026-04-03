@@ -195,11 +195,15 @@ fn load_context_or_current(name: Option<&str>) -> Result<(String, Context, Confi
             })?;
             ctx.map(|(name, context)| (name, context, config)).ok_or_else(|| {
                 let error = Error::msg("no context name");
-                eprintln!(
+                println!(
                     r#"no context name given and no active context — pass a name or set one with "context use""#
                 );
                 error
             })
         }
     }
+}
+
+fn coalesce_realm<'a>(ctx: &'a Context, realm: Option<&'a str>) -> Option<&'a str> {
+    ctx.realm.as_deref().or(realm)
 }

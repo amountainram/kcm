@@ -71,8 +71,12 @@ fn main() {
     let paths_code = generate_paths(&spec);
 
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-    fs::write(out_dir.join("keycloak.rs"), types_code)
-        .expect("failed to write openapi keycloak structs");
+    let keycloak_path = out_dir.join("keycloak.rs");
+    fs::write(&keycloak_path, types_code).expect("failed to write openapi keycloak structs");
+    std::process::Command::new("rustfmt")
+        .arg(&keycloak_path)
+        .status()
+        .expect("failed to run rustfmt on generated keycloak.rs");
     fs::write(out_dir.join("keycloak_paths.rs"), paths_code)
         .expect("failed to write openapi keycloak paths");
 }

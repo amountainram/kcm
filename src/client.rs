@@ -1,6 +1,6 @@
 use crate::{Error, Result, commands::Context};
 use serde::Deserialize;
-use tracing::error;
+use tracing::{debug, error};
 use typed_builder::TypedBuilder;
 use ureq::{Body, http::Response};
 
@@ -9,12 +9,32 @@ pub mod keycloak {
 
     include!(concat!(env!("OUT_DIR"), "/keycloak_paths.rs"));
 
-    #[derive(serde::Deserialize)]
+    #[derive(serde::Deserialize, serde::Serialize)]
     pub struct OpenidConfiguration {
         #[serde(rename = "token_endpoint")]
         pub token_endpoint: String,
         #[serde(rename = "jwks_uri")]
         pub jwks_uri: String,
+    }
+
+    #[derive(serde::Deserialize, serde::Serialize)]
+    pub struct AuthAccessToken {
+        #[serde(rename = "access_token")]
+        pub access_token: String,
+        #[serde(rename = "expires_in")]
+        pub expires_in: i64,
+        #[serde(rename = "refresh_expires_in")]
+        pub refresh_expires_in: Option<i64>,
+        #[serde(rename = "refresh_token")]
+        pub refresh_token: Option<String>,
+        #[serde(rename = "token_type")]
+        pub token_type: Option<String>,
+        #[serde(rename = "not-before-policy")]
+        pub not_before_policy: Option<i64>,
+        #[serde(rename = "session_state")]
+        pub session_state: Option<String>,
+        #[serde(rename = "scope")]
+        pub scope: Option<String>,
     }
 }
 
@@ -24,18 +44,26 @@ where
 {
     let status = res.status();
     let mut body = res.into_body();
+
     if let Some(mime_type) = body.mime_type()
         && mime_type.contains(mime::APPLICATION_JSON.essence_str())
     {
-        body.read_json()
-            .inspect_err(|error| {
-                error!(
-                    status_code = status.as_u16(),
-                    ?error,
-                    "failed to deserialize json"
-                );
-            })
-            .map_err(Error::from)
+        let json = if tracing::enabled!(tracing::Level::DEBUG) {
+            let raw = body.read_to_string()?;
+            debug!(body = raw, status_code = status.as_u16(), "raw body");
+            serde_json::from_str(&raw).map_err(Error::from)
+        } else {
+            body.read_json().map_err(Error::from)
+        };
+
+        json.inspect_err(|error| {
+            error!(
+                status_code = status.as_u16(),
+                ?error,
+                "failed to deserialize json"
+            );
+        })
+        .map_err(Error::from)
     } else {
         Err(Error::msg("response is not json"))
     }
@@ -74,10 +102,6 @@ pub struct RealmClient {
 }
 
 impl RealmClient {
-    pub fn context(&self) -> &Context {
-        &self.context
-    }
-
     fn openid_configuration(&self) -> Result<keycloak::OpenidConfiguration> {
         let realm = self.realm.as_str();
         let openid_config_url = format!(
@@ -97,10 +121,18 @@ impl RealmClient {
             |error| error!(url = %openid_config.jwks_uri, ?error, "failed to fetch jwks"),
         )?;
         let res = handle_response(res)?;
-        as_json(res)
+        as_json(res).inspect(|jwks| {
+            debug!(
+                server_url = self.server_url,
+                realm = self.realm,
+                openid_config = serde_json::to_string(&openid_config).unwrap_or_default(),
+                jwks = serde_json::to_string(&jwks).unwrap_or_default(),
+                "jwks"
+            )
+        })
     }
 
-    pub fn token(&self) -> Result<keycloak::AccessToken> {
+    pub fn token(&self) -> Result<keycloak::AuthAccessToken> {
         let username = match &self.context.username {
             Some(p) => p,
             None => {
@@ -121,22 +153,22 @@ impl RealmClient {
         };
 
         let keycloak::OpenidConfiguration { token_endpoint, .. } = self.openid_configuration()?;
-        let res = ureq::post(token_endpoint)
+        let res = ureq::post(&token_endpoint)
             .content_type(mime::APPLICATION_WWW_FORM_URLENCODED.essence_str())
             .send_form([
                 ("grant_type", "password"),
-                ("client_id", "admin_cli"),
+                ("client_id", "admin-cli"),
                 ("username", username),
                 ("password", password),
-            ])?;
+            ])
+            .inspect_err(|error| error!(?error, endpoint = token_endpoint, "http failure"))?;
         let res = handle_response(res)?;
-        let token = as_json::<keycloak::AccessToken>(res)?;
-
-        println!("{token:#?}");
-        todo!()
+        as_json(res).inspect_err(|error| {
+            error!(
+                ?error,
+                endpoint = token_endpoint,
+                "failed to deserialize token"
+            );
+        })
     }
-}
-
-fn a() {
-    keycloak::paths::realms_get();
 }
