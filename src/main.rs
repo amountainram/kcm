@@ -3,6 +3,7 @@ pub use error::{Context, Error, Result};
 use std::{env, process::ExitCode};
 
 mod cli;
+mod client;
 mod commands;
 mod error;
 
@@ -42,13 +43,17 @@ fn main() -> ExitCode {
 
     let result = match command {
         Commands::Context { command } => context_action(command),
-    };
-
-    if result.is_err() {
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
     }
+    .inspect_err(|error| {
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            tracing::error!(?error, "error on exit");
+        }
+    });
+
+    result
+        .is_ok()
+        .then_some(ExitCode::SUCCESS)
+        .unwrap_or(ExitCode::FAILURE)
 }
 
 fn logger_try_init() -> Result<()> {
@@ -61,13 +66,15 @@ fn logger_try_init() -> Result<()> {
         "rustls=info,",
     );
 
-    let log_level = env::var("LOG_LEVEL").or_else(|err| {
-        if matches!(err, env::VarError::NotPresent) {
-            Ok(::tracing::Level::INFO.to_string())
-        } else {
-            Err(err)
-        }
-    })?;
+    let log_level = env::var("LOG_LEVEL")
+        .map(|l| l.trim().to_lowercase())
+        .or_else(|err| {
+            if matches!(err, env::VarError::NotPresent) {
+                Ok(tracing::Level::INFO.to_string())
+            } else {
+                Err(err)
+            }
+        })?;
 
     // this is the only place where RUST_LOG variable is set, since it did not exist before
     // therefore it should be safe to read the variable from a multi-thread environment
