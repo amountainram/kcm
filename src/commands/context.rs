@@ -1,5 +1,5 @@
 use super::{Config, Context, current_context, load_config, save_config};
-use crate::{Context as _, Error, Result};
+use crate::{Context as _, Error, Result, cli::OutputFormat};
 use std::{
     io::{self, IsTerminal, Write},
     process::{Command, Stdio},
@@ -149,15 +149,28 @@ pub fn r#use(name: Option<String>) -> Result<()> {
     Ok(())
 }
 
-pub fn show() -> Result<()> {
+pub fn show(format: OutputFormat) -> Result<()> {
     if let Some((name, current_context)) =
         current_context().with_context(|| "while loading configuration")?
     {
-        println!();
-        print_context(&name, &current_context, true);
-        println!();
+        match format {
+            OutputFormat::Json => {
+                let mut map = serde_json::Map::new();
+                map.insert("name".into(), name.into());
+                map.insert("context".into(), serde_json::to_value(&current_context)?);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::Value::Object(map))?
+                );
+            }
+            OutputFormat::Plain => {
+                println!();
+                print_context(&name, &current_context, true);
+                println!();
+            }
+        }
     } else {
-        eprintln!("no active context");
+        println!("no active context");
     }
     Ok(())
 }
@@ -224,7 +237,7 @@ pub fn update(
         Some(x) => x,
         None => {
             let error = Error::msg("no context name");
-            eprintln!(
+            println!(
                 r#"no context name given and no active context — pass a name or set one with "context use""#
             );
             return Err(error);
@@ -265,7 +278,7 @@ pub fn update(
         Ok(())
     } else {
         let error = Error::msg("context does not exist");
-        eprintln!(r#"context "{name}" not found — use "context create" to add it"#,);
+        println!(r#"context "{name}" not found — use "context create" to add it"#);
         return Err(error);
     }
 }
@@ -295,19 +308,34 @@ pub fn delete(yes: bool, name: String) -> Result<()> {
     Ok(())
 }
 
-pub fn list() -> Result<()> {
+pub fn list(format: OutputFormat) -> Result<()> {
     let config = load_config().with_context(|| "while loading configuration")?;
 
     if config.contexts.is_empty() {
-        eprintln!("no context configured");
+        println!("no context configured");
         return Ok(());
     }
 
-    println!();
-    for (name, ctx) in config.contexts.iter() {
-        print_context(name, ctx, Some(name) == config.current_context.as_ref());
+    match format {
+        OutputFormat::Json => {
+            let mut map = serde_json::Map::new();
+            if let Some(cur) = &config.current_context {
+                map.insert("current-context".into(), cur.clone().into());
+            }
+            map.insert("contexts".into(), serde_json::to_value(&config.contexts)?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::Value::Object(map))?
+            );
+        }
+        OutputFormat::Plain => {
+            println!();
+            for (name, ctx) in config.contexts.iter() {
+                print_context(name, ctx, Some(name) == config.current_context.as_ref());
+            }
+            println!();
+        }
     }
-    println!();
 
     Ok(())
 }

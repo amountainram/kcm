@@ -1,5 +1,12 @@
 pub use clap::Parser;
-use clap::Subcommand;
+use clap::{Subcommand, ValueEnum};
+
+#[derive(Clone, Copy, Default, ValueEnum)]
+pub enum OutputFormat {
+    #[default]
+    Plain,
+    Json,
+}
 
 #[derive(Subcommand)]
 pub enum ContextCommands {
@@ -78,20 +85,46 @@ pub enum ContextCommands {
     },
     /// List all contexts
     #[command(name = "list")]
-    List,
+    List {
+        /// Output format
+        #[arg(long = "format", default_value = "plain")]
+        format: OutputFormat,
+    },
     /// Show the active context
     #[command(name = "show")]
-    Show,
+    Show {
+        /// Output format
+        #[arg(long = "format", default_value = "plain")]
+        format: OutputFormat,
+    },
 }
 
 #[derive(Subcommand)]
 pub enum AuthorizeCommands {
     #[command(name = "login")]
-    Login { context: Option<String> },
+    Login {
+        /// Name of the context
+        context: Option<String>,
+        /// Login realm
+        #[arg(short = 'r', long = "realm", default_value = "master")]
+        realm: String,
+    },
     #[command(name = "logout")]
-    Logout { context: Option<String> },
+    Logout {
+        /// Name of the context
+        context: Option<String>,
+    },
     #[command(name = "status")]
-    Status { context: Option<String> },
+    Status {
+        /// Name of the context
+        context: Option<String>,
+        /// Realm to validate current auth token
+        #[arg(short = 'r', long = "realm", default_value = "master")]
+        realm: String,
+        /// Output format
+        #[arg(long = "format", default_value = "plain")]
+        format: OutputFormat,
+    },
 }
 
 #[derive(Subcommand)]
