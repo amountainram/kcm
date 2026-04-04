@@ -1,12 +1,15 @@
-use crate::{Error, Result, client::AuthAccessToken};
+use crate::{Error, Result, cli::OutputFormat, client::AuthAccessToken, out};
+pub use colored::Color;
 use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
     collections::BTreeMap,
-    env, fmt, fs, io,
+    env, fmt, fs,
+    io::{self, Write, stdout},
     path::{Path, PathBuf},
 };
 use tracing::error;
+use typed_builder::TypedBuilder;
 
 pub mod authorize;
 pub mod clients;
@@ -299,4 +302,87 @@ fn load_context_or_current(name: Option<&str>) -> Result<(String, Context, Confi
 
 fn coalesce_realm<'a>(ctx: &'a Context, realm: Option<&'a str>) -> Option<&'a str> {
     ctx.realm.as_deref().or(realm)
+}
+
+const LABEL_WIDTH: usize = 20;
+
+#[derive(TypedBuilder)]
+struct Printer {
+    #[builder(default)]
+    format: OutputFormat,
+    #[builder(default, setter(skip))]
+    buffer: serde_json::Map<String, serde_json::Value>,
+}
+
+impl Drop for Printer {
+    fn drop(&mut self) {
+        match self.format {
+            OutputFormat::Plain => {
+                let _ = stdout().flush();
+            }
+            OutputFormat::Json => {
+                out!(
+                    "{}",
+                    serde_json::to_string_pretty(&self.buffer)
+                        .inspect_err(|error| {
+                            error!(%error, "failed to serialize token claims");
+                        })
+                        .unwrap_or_default()
+                );
+            }
+        }
+    }
+}
+
+impl Printer {
+    pub fn ln(&self) {
+        if matches!(self.format, OutputFormat::Plain) {
+            out!();
+        }
+    }
+
+    pub fn print_field<K, V>(&mut self, label: K, value: V)
+    where
+        K: fmt::Display + Into<String>,
+        V: fmt::Display + Clone + Into<serde_json::Value>,
+    {
+        use colored::Colorize;
+
+        const LABEL_WIDTH: usize = 20;
+
+        match self.format {
+            OutputFormat::Plain => {
+                let label = format!("{label}:");
+                out!(
+                    "    {} {value}",
+                    format!("{label:<width$}", width = LABEL_WIDTH).dimmed(),
+                );
+            }
+            OutputFormat::Json => {
+                self.buffer.insert(label.into(), value.clone().into());
+            }
+        }
+    }
+
+    pub fn print_field_with_color<K, V>(&mut self, label: K, value: V, color: colored::Color)
+    where
+        K: fmt::Display + Into<String>,
+        V: fmt::Display + Clone + Into<serde_json::Value>,
+    {
+        use colored::Colorize;
+
+        match self.format {
+            OutputFormat::Plain => {
+                let label = format!("{label}:");
+                let value = value.to_string().color(color);
+                out!(
+                    "    {} {value}",
+                    format!("{label:<width$}", width = LABEL_WIDTH).dimmed(),
+                );
+            }
+            OutputFormat::Json => {
+                self.print_field(label, value);
+            }
+        }
+    }
 }

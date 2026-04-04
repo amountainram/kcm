@@ -104,6 +104,18 @@ pub struct AdminCliClient {
 }
 
 impl AdminCliClient {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn server_url(&self) -> &str {
+        &self.server_url
+    }
+
+    pub fn realm(&self) -> &str {
+        &self.realm
+    }
+
     fn openid_configuration(&self) -> Result<keycloak::OpenidConfiguration> {
         let realm = self.realm.as_str();
         let openid_config_url = format!(

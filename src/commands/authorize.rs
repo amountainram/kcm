@@ -1,28 +1,14 @@
-use super::{coalesce_realm, load_context_or_current, save_config};
+use super::{Color, Printer, coalesce_realm, load_context_or_current, save_config};
 use crate::{
     Error, Result,
     cli::OutputFormat,
     client::{AccessToken, AdminCliClient, AuthAccessToken},
-    out,
+    out, outfmt,
 };
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
-use colored::Colorize;
 use jsonwebtoken::{DecodingKey, Validation, decode_header};
-use std::{
-    fmt,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, error};
-
-const LABEL_WIDTH: usize = 20;
-
-fn print_field(label: &str, value: impl fmt::Display) {
-    let label = format!("{label}:");
-    println!(
-        "    {} {value}",
-        format!("{label:<width$}", width = LABEL_WIDTH).dimmed(),
-    );
-}
 
 fn now_epoch() -> i64 {
     SystemTime::now()
@@ -137,7 +123,8 @@ pub fn login(name: Option<String>, realm: String) -> Result<()> {
 pub fn status(name: Option<String>, realm: String, format: OutputFormat) -> Result<()> {
     let (name, ctx, _) = load_context_or_current(name.as_deref()).inspect_err(|err| {
         if matches!(err, Error::ContextSelection) {
-            out!(
+            outfmt!(
+                format,
                 "no context name given and no active context —  \
                  pass a name or set one with \"context use\""
             );
@@ -150,7 +137,8 @@ pub fn status(name: Option<String>, realm: String, format: OutputFormat) -> Resu
             ..
         }) => (access_token, refresh_expires_in),
         None => {
-            out!(
+            outfmt!(
+                format,
                 "no token found on current context —  \
                  use \"authorize login\" to obtain one"
             );
@@ -162,7 +150,8 @@ pub fn status(name: Option<String>, realm: String, format: OutputFormat) -> Resu
     let server_url = match &ctx.server_url {
         Some(s) => s.clone(),
         None => {
-            out!(
+            outfmt!(
+                format,
                 "cannot find server-url on current context —  \
                  use \"context update --server-url <url>\""
             );
@@ -174,7 +163,8 @@ pub fn status(name: Option<String>, realm: String, format: OutputFormat) -> Resu
     let realm = match coalesce_realm(&ctx, Some(realm.as_str())) {
         Some(r) => r.to_string(),
         None => {
-            out!(
+            outfmt!(
+                format,
                 "cannot find realm on current context —  \
                  use \"context update --realm <realm>\""
             );
@@ -206,7 +196,8 @@ pub fn status(name: Option<String>, realm: String, format: OutputFormat) -> Resu
             "validation context"
         );
 
-        out!(
+        outfmt!(
+            format,
             "invalid authorization status —  \
              use \"authorize login\""
         );
@@ -240,7 +231,8 @@ pub fn status(name: Option<String>, realm: String, format: OutputFormat) -> Resu
 
         error!(%error, kid, "failed to build decoding key");
 
-        out!(
+        outfmt!(
+            format,
             "invalid authorization status —  \
              use \"authorize login\""
         );
@@ -272,137 +264,110 @@ pub fn status(name: Option<String>, realm: String, format: OutputFormat) -> Resu
             let claims = BASE64_URL_SAFE_NO_PAD
                 .decode(*claims)
                 .inspect_err(|error| error!(%error, claims, "failed to decode claims"))?;
+
+            debug!(
+                name = client.name(),
+                server_url = client.server_url(),
+                realm = client.realm(),
+                decoded_claims = %String::from_utf8_lossy(&claims)
+            );
+
             let claims = serde_json::from_slice::<AccessToken>(&claims)
                 .inspect_err(|error| error!(%error, "failed to parse claims"))?;
+
             (Err(error), claims)
         }
     };
     let now = now_epoch();
+    let mut printer = Printer::builder().format(format).build();
 
-    match format {
-        OutputFormat::Json => {
-            let mut map = serde_json::Map::new();
-            if let Some(v) = &t.sub {
-                map.insert("sub".into(), v.clone().into());
-            }
-            if let Some(v) = &t.preferred_username {
-                map.insert("preferred-username".into(), v.clone().into());
-            }
-            if let Some(v) = &t.name {
-                map.insert("name".into(), v.clone().into());
-            }
-            if let Some(v) = &t.given_name {
-                map.insert("given-name".into(), v.clone().into());
-            }
-            if let Some(v) = &t.family_name {
-                map.insert("family-name".into(), v.clone().into());
-            }
-            if let Some(v) = &t.email {
-                map.insert("email".into(), v.clone().into());
-            }
-            if let Some(v) = &t.iss {
-                map.insert("issuer".into(), v.clone().into());
-            }
-            if let Some(v) = &t.azp {
-                map.insert("authorized-party".into(), v.clone().into());
-            }
-            if let Some(v) = &t.typ {
-                map.insert("type".into(), v.clone().into());
-            }
-            if let Some(v) = &t.scope {
-                map.insert("scope".into(), v.clone().into());
-            }
-            if let Some(iat) = &t.iat {
-                map.insert("issued-at".into(), (*iat).into());
-            }
-            if let Some(exp) = &t.exp {
-                map.insert("expires".into(), (*exp).into());
-                map.insert(
-                    "status".into(),
-                    if *exp > now { "valid" } else { "expired" }.into(),
-                );
-            }
-            if let Some(rei) = &refresh_expires_in {
-                if let Some(iat) = &t.iat {
-                    let refresh_exp = iat + rei;
-                    map.insert("refresh-expires".into(), refresh_exp.into());
-                    map.insert("refreshable".into(), (refresh_exp > now).into());
-                }
-            }
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::Value::Object(map)).inspect_err(
-                    |error| {
-                        error!(%error, "failed to serialize token claims");
-                    }
-                )?
-            );
+    let mut any = false;
+    printer.ln();
+    if let Some(v) = &t.sub {
+        printer.print_field("sub", v.to_string());
+        any = true;
+    }
+    if let Some(v) = &t.preferred_username {
+        printer.print_field("preferred-username", v.to_string());
+        any = true;
+    }
+    if let Some(v) = &t.name {
+        printer.print_field("name", v.to_string());
+        any = true;
+    }
+    if let Some(v) = &t.given_name {
+        printer.print_field("given-name", v.to_string());
+        any = true;
+    }
+    if let Some(v) = &t.family_name {
+        printer.print_field("family-name", v.to_string());
+        any = true;
+    }
+    if let Some(v) = &t.email {
+        printer.print_field("email", v.to_string());
+        any = true;
+    }
+    if any {
+        printer.ln();
+    }
+
+    any = false;
+    if let Some(v) = &t.iss {
+        printer.print_field("issuer", v.to_string());
+        any = true;
+    }
+    if let Some(v) = &t.azp {
+        printer.print_field("authorized-party", v.to_string());
+        any = true;
+    }
+    if let Some(v) = &t.typ {
+        printer.print_field("type", v.to_string());
+        any = true;
+    }
+    if let Some(v) = &t.scope {
+        printer.print_field("scope", v.to_string());
+        any = true;
+    }
+    if any {
+        printer.ln();
+    }
+
+    any = false;
+    if let Some(iat) = &t.iat {
+        let rel = fmt_relative(*iat - now);
+        printer.print_field("issued-at", format!("{iat} ({rel})"));
+        any = true;
+    }
+    if let Some(exp) = &t.exp {
+        let rel = fmt_relative(*exp - now);
+        printer.print_field("expires", format!("{exp} ({rel})"));
+        if *exp > now {
+            printer.print_field_with_color("status", "valid", Color::Green);
+        } else {
+            printer.print_field_with_color("status", "expired", Color::Red);
         }
-        OutputFormat::Plain => {
-            println!();
-            if let Some(v) = &t.sub {
-                print_field("sub", v);
+        any = true;
+    }
+    if let Some(rei) = &refresh_expires_in {
+        if let Some(iat) = &t.iat {
+            let refresh_exp = iat + rei;
+            let rel = fmt_relative(refresh_exp - now);
+            printer.print_field("refresh-expires", format!("{refresh_exp} ({rel})"));
+            if refresh_exp > now {
+                printer.print_field_with_color("refreshable", "yes", Color::Green);
+            } else {
+                printer.print_field_with_color("refreshable", "no", Color::Red);
             }
-            if let Some(v) = &t.preferred_username {
-                print_field("preferred-username", v);
-            }
-            if let Some(v) = &t.name {
-                print_field("name", v);
-            }
-            if let Some(v) = &t.given_name {
-                print_field("given-name", v);
-            }
-            if let Some(v) = &t.family_name {
-                print_field("family-name", v);
-            }
-            if let Some(v) = &t.email {
-                print_field("email", v);
-            }
-            println!();
-            if let Some(v) = &t.iss {
-                print_field("issuer", v);
-            }
-            if let Some(v) = &t.azp {
-                print_field("authorized-party", v);
-            }
-            if let Some(v) = &t.typ {
-                print_field("type", v);
-            }
-            if let Some(v) = &t.scope {
-                print_field("scope", v);
-            }
-            println!();
-            if let Some(iat) = &t.iat {
-                let rel = fmt_relative(*iat - now);
-                print_field("issued-at", format!("{iat} ({rel})"));
-            }
-            if let Some(exp) = &t.exp {
-                let rel = fmt_relative(*exp - now);
-                print_field("expires", format!("{exp} ({rel})"));
-                if *exp > now {
-                    print_field("status", "valid".green());
-                } else {
-                    print_field("status", "expired".red());
-                }
-            }
-            if let Some(rei) = &refresh_expires_in {
-                if let Some(iat) = &t.iat {
-                    let refresh_exp = iat + rei;
-                    let rel = fmt_relative(refresh_exp - now);
-                    print_field("refresh-expires", format!("{refresh_exp} ({rel})"));
-                    if refresh_exp > now {
-                        print_field("refreshable", "yes".green());
-                    } else {
-                        print_field("refreshable", "no".red());
-                    }
-                }
-            }
-            println!();
         }
+        any = true;
+    }
+    if any {
+        printer.ln();
     }
 
     Ok(result.inspect_err(|_| {
-        out!(
+        outfmt!(
+            format,
             "invalid authorization status —  \
              use \"authorize login\""
         );

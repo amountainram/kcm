@@ -23,6 +23,17 @@ macro_rules! out {
     }};
 }
 
+#[macro_export]
+macro_rules! outfmt {
+    ($fmt:ident, $($arg:tt)*) => {{
+        if matches!($fmt, crate::cli::OutputFormat::Json) {
+            eprintln!($($arg)*);
+        } else {
+            println!($($arg)*);
+        }
+    }};
+}
+
 fn context_action(command: ContextCommands) -> Result<()> {
     match command {
         ContextCommands::Create {

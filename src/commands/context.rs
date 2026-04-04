@@ -1,5 +1,5 @@
 use super::{Config, Context, current_context, load_config, save_config};
-use crate::{Error, Result, cli::OutputFormat, out};
+use crate::{Error, Result, cli::OutputFormat, out, outfmt};
 use std::{
     io::{IsTerminal, Write, stderr, stdin},
     process::{Command, Stdio},
@@ -169,7 +169,8 @@ pub fn r#use(name: Option<String>) -> Result<()> {
 pub fn show(format: OutputFormat) -> Result<()> {
     if let Some((name, current_context)) = current_context().inspect_err(|err| {
         if matches!(err, Error::ContextNotFound) {
-            out!(
+            outfmt!(
+                format,
                 r#"no current context configured —  \
                     select one with "context use""#
             );
@@ -200,7 +201,7 @@ pub fn show(format: OutputFormat) -> Result<()> {
             }
         }
     } else {
-        out!("no active context");
+        outfmt!(format, "no active context");
     }
     Ok(())
 }
@@ -359,7 +360,7 @@ pub fn list(format: OutputFormat) -> Result<()> {
     let config = load_config()?;
 
     if config.contexts.is_empty() {
-        out!("no context configured");
+        outfmt!(format, "no context configured");
         return Ok(());
     }
 
