@@ -93,7 +93,7 @@ pub fn login(name: Option<String>, realm: String) -> Result<()> {
                 "cannot find server-url on current context —  \
                  use \"context update --server-url <url>\""
             );
-            return Err(Error::msg("missing server-url"));
+            return Err(Error::MissingArgument);
         }
     };
 
@@ -103,19 +103,28 @@ pub fn login(name: Option<String>, realm: String) -> Result<()> {
         .realm(realm.clone())
         .context(ctx)
         .build();
-    client.refresh().inspect_err(|err| {
-        if matches!(err, Error::ContextMissingUsername) {
-            out!(
-                "cannot find username on current context —  \
+    client
+        .refresh()
+        .inspect_err(|err| {
+            if matches!(err, Error::ContextMissingUsername) {
+                out!(
+                    "cannot find username on current context —  \
                  use \"context update --username <username>\""
-            );
-        } else if matches!(err, Error::ContextMissingPassword) {
-            out!(
-                "cannot find password on current context —  \
+                );
+            } else if matches!(err, Error::ContextMissingPassword) {
+                out!(
+                    "cannot find password on current context —  \
                  use \"context update --username <username>\""
-            );
-        }
-    })?;
+                );
+            }
+        })
+        .or_else(|err| {
+            if matches!(err, Error::AuthNoTokenFound) {
+                client.token()
+            } else {
+                Err(err)
+            }
+        })?;
 
     let (name, ctx) = client.consume();
     config.contexts.entry(name).insert_entry(ctx);

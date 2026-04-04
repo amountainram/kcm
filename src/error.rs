@@ -4,6 +4,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Debug)]
 pub enum Error {
+    AuthNoTokenFound,
     JwtInvalidClaims,
     JwtDecodingKey,
     JwtMissingKid,
@@ -42,6 +43,7 @@ where
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let msg = match self {
+            Self::AuthNoTokenFound => "no token found",
             Self::JwtInvalidClaims => "token invalid claims",
             Self::JwtDecodingKey => "failed to build decoding key",
             Self::JwtMissingKid => "missing kid from token header",

@@ -176,9 +176,7 @@ impl AdminCliClient {
         let now = now_epoch();
         let token = match self.context.get_token()? {
             None => {
-                let msg = "no token found for refresh";
-                println!("{msg}");
-                return Err(Error::msg(msg));
+                return Err(Error::AuthNoTokenFound);
             }
             Some(x) => x,
         };
