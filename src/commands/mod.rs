@@ -1,4 +1,4 @@
-use crate::{Context as _, Error, Result};
+use crate::{Context as _, Error, Result, client::AuthAccessToken};
 use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
@@ -9,6 +9,7 @@ use std::{
 use tracing::error;
 
 pub mod authorize;
+pub mod clients;
 pub mod context;
 
 pub const KCM_CONFIG: &str = "KCM_CONFIG";
@@ -97,7 +98,9 @@ impl Context {
         }
     }
 
-    pub fn set_token(&mut self, name: &str, value: &str) -> Result<()> {
+    pub fn set_token(&mut self, name: &str, at: &AuthAccessToken) -> Result<()> {
+        let value = &serde_json::to_string(&at)
+            .inspect_err(|error| error!(?error, "failed to store secret in OS keyring"))?;
         let entry = Self::keyring_entry(name, "token")?;
         entry
             .set_password(value)
@@ -113,9 +116,23 @@ impl Context {
         Ok(())
     }
 
-    pub fn get_token(&self) -> Result<Option<String>> {
+    pub fn get_token(&self) -> Result<Option<AuthAccessToken>> {
         match &self.token {
-            Some(key_ref) => Self::keyring_read(key_ref.read()),
+            Some(key_ref) => Self::keyring_read(key_ref.read())
+                .inspect_err(|error| {
+                    error!(?error, "failed to retrieve token from OS keyring");
+                })
+                .map_err(Error::from)
+                .and_then(|at| match at {
+                    None => Ok(None),
+                    Some(at) => Ok(Some(
+                        serde_json::from_str(&at)
+                            .inspect_err(|error| {
+                                error!(?error, "failed to deserialize token from OS keyring");
+                            })
+                            .map_err(Error::from)?,
+                    )),
+                }),
             None => Ok(None),
         }
     }
@@ -128,17 +145,6 @@ impl Context {
             Self::keyring_remove(key_ref.read())?;
         }
         Ok(())
-    }
-
-    pub fn resolved(&self) -> Result<Self> {
-        let mut copy = self.clone();
-        if let Some(pw) = self.get_password()? {
-            copy.password = Some(pw.into());
-        }
-        if let Some(tok) = self.get_token()? {
-            copy.token = Some(tok.into());
-        }
-        Ok(copy)
     }
 }
 

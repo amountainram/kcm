@@ -1,7 +1,4 @@
-use super::{
-    Config, Context, current_context,
-    load_config, save_config,
-};
+use super::{Config, Context, current_context, load_config, save_config};
 use crate::{Context as _, Error, Result, cli::OutputFormat};
 use std::{
     io::{self, IsTerminal, Write},
@@ -198,8 +195,7 @@ pub fn create(
         return Err(error);
     }
 
-    let password = resolve_password(password)
-        .with_context(|| "while reading password")?;
+    let password = resolve_password(password).with_context(|| "while reading password")?;
 
     let mut ctx = Context {
         server_url,
@@ -213,7 +209,10 @@ pub fn create(
         ctx.set_password(&name, &pw)?;
     }
     if let Some(tok) = token {
-        ctx.set_token(&name, &tok)?;
+        let tok = &serde_json::from_str(&tok).inspect_err(|error| {
+            error!(name, ?error, "failed to deserialize token from input");
+        })?;
+        ctx.set_token(&name, tok)?;
     }
 
     if current {
@@ -252,8 +251,7 @@ pub fn update(
         }
     };
     if let Some(entry) = contexts.get_mut(&name) {
-        let password = resolve_password(password)
-            .with_context(|| "while reading password")?;
+        let password = resolve_password(password).with_context(|| "while reading password")?;
 
         if current {
             let _ = current_context.insert(name.clone());
@@ -271,7 +269,10 @@ pub fn update(
             entry.set_password(&name, &pw)?;
         }
         if let Some(tok) = token {
-            entry.set_token(&name, &tok)?;
+            let tok = &serde_json::from_str(&tok).inspect_err(|error| {
+                error!(name, ?error, "failed to deserialize token from input");
+            })?;
+            entry.set_token(&name, tok)?;
         }
 
         save_config(&Config {

@@ -1,8 +1,7 @@
+use crate::cli::AuthorizeCommands;
 use cli::{Args, Commands, ContextCommands, Parser};
 pub use error::{Context, Error, Result};
-use std::{env, process::ExitCode};
-
-use crate::cli::AuthorizeCommands;
+use std::{env, io::Write, process::ExitCode};
 
 mod cli;
 mod client;
@@ -64,6 +63,8 @@ fn main() -> ExitCode {
             tracing::error!(?error, "error on exit");
         }
     });
+
+    let _ = std::io::stderr().flush();
 
     result
         .is_ok()

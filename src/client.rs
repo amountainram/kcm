@@ -1,10 +1,11 @@
 use crate::{Error, Result, commands::Context};
+pub use keycloak::{AccessToken, AuthAccessToken};
 use serde::Deserialize;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 use typed_builder::TypedBuilder;
 use ureq::{Body, http::Response};
 
-pub mod keycloak {
+mod keycloak {
     include!(concat!(env!("OUT_DIR"), "/keycloak.rs"));
 
     include!(concat!(env!("OUT_DIR"), "/keycloak_paths.rs"));
@@ -95,13 +96,14 @@ fn handle_response(res: Response<Body>) -> Result<Response<Body>> {
 }
 
 #[derive(TypedBuilder)]
-pub struct RealmClient {
+pub struct AdminCliClient {
+    name: String,
     server_url: String,
     realm: String,
     context: Context,
 }
 
-impl RealmClient {
+impl AdminCliClient {
     fn openid_configuration(&self) -> Result<keycloak::OpenidConfiguration> {
         let realm = self.realm.as_str();
         let openid_config_url = format!(
@@ -132,7 +134,7 @@ impl RealmClient {
         })
     }
 
-    pub fn token(&self) -> Result<keycloak::AuthAccessToken> {
+    pub fn token(&mut self) -> Result<keycloak::AuthAccessToken> {
         let username = match &self.context.username {
             Some(p) => p,
             None => {
@@ -142,8 +144,8 @@ impl RealmClient {
                 return Err(Error::msg("missing username"));
             }
         };
-        let password = match &self.context.password {
-            Some(p) => p.read(),
+        let password = match self.context.get_password()? {
+            Some(p) => p,
             None => {
                 eprintln!(
                     r#"cannot find password on current context. use "context update --password""#
@@ -159,50 +161,110 @@ impl RealmClient {
                 ("grant_type", "password"),
                 ("client_id", "admin-cli"),
                 ("username", username),
-                ("password", password),
+                ("password", &password),
             ])
             .inspect_err(|error| error!(?error, endpoint = token_endpoint, "http failure"))?;
         let res = handle_response(res)?;
-        as_json(res).inspect_err(|error| {
+        let at = as_json::<keycloak::AuthAccessToken>(res).inspect_err(|error| {
             error!(
                 ?error,
                 endpoint = token_endpoint,
                 "failed to deserialize token"
             );
-        })
+        })?;
+
+        self.context.set_token(&self.name, &at)?;
+
+        Ok(at)
     }
 
-    pub fn refresh(
-        &self,
-        refresh_token: &str,
-    ) -> Result<keycloak::AuthAccessToken> {
-        let keycloak::OpenidConfiguration {
-            token_endpoint, ..
-        } = self.openid_configuration()?;
+    pub fn refresh(&mut self) -> Result<keycloak::AuthAccessToken> {
+        let now = now_epoch();
+        let token = match self.context.get_token()? {
+            None => {
+                let msg = "no token found for refresh";
+                println!("{msg}");
+                return Err(Error::msg(msg));
+            }
+            Some(x) => x,
+        };
+        let AuthAccessToken {
+            access_token,
+            expires_in,
+            refresh_token,
+            refresh_expires_in,
+            ..
+        } = &token;
+        let iat = token_iat(&access_token).unwrap_or(now);
+        if iat + expires_in > now {
+            debug!("access token still valid");
+            return Ok(token);
+        }
+
+        let (rei, refresh_token) = match (refresh_expires_in, refresh_token) {
+            (Some(x), Some(y)) => (x, y),
+            _ => {
+                error!(
+                    name = self.name,
+                    "attempted refresh but no sitting token found"
+                );
+                let msg = "no token found for refresh";
+                println!("{msg}");
+                return Err(Error::msg(msg));
+            }
+        };
+        let refresh_ok = iat + rei > now;
+        if !refresh_ok {
+            warn!("refresh token expired. attempting to login with sitting grants");
+            return self.token();
+        }
+
+        let keycloak::OpenidConfiguration { token_endpoint, .. } = self.openid_configuration()?;
         let res = ureq::post(&token_endpoint)
-            .content_type(
-                mime::APPLICATION_WWW_FORM_URLENCODED
-                    .essence_str(),
-            )
+            .content_type(mime::APPLICATION_WWW_FORM_URLENCODED.essence_str())
             .send_form([
                 ("grant_type", "refresh_token"),
                 ("client_id", "admin-cli"),
-                ("refresh_token", refresh_token),
+                ("refresh_token", &refresh_token),
             ])
-            .inspect_err(|error| {
-                error!(
-                    ?error,
-                    endpoint = token_endpoint,
-                    "http failure"
-                )
-            })?;
+            .inspect_err(|error| error!(?error, endpoint = token_endpoint, "http failure"))?;
         let res = handle_response(res)?;
-        as_json(res).inspect_err(|error| {
+        let at = as_json(res).inspect_err(|error| {
             error!(
                 ?error,
                 endpoint = token_endpoint,
                 "failed to deserialize refreshed token"
             );
-        })
+        })?;
+
+        self.context.set_token(&self.name, &at)?;
+
+        Ok(at)
     }
+
+    pub fn consume(self) -> (String, Context) {
+        (self.name, self.context)
+    }
+}
+
+fn now_epoch() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
+fn token_iat(jwt: &str) -> Option<i64> {
+    use base64::prelude::{BASE64_URL_SAFE_NO_PAD, Engine};
+
+    #[derive(serde::Deserialize)]
+    struct Claims {
+        iat: Option<i64>,
+    }
+    let payload = jwt.split('.').nth(1)?;
+    let bytes = BASE64_URL_SAFE_NO_PAD.decode(payload).ok()?;
+    let claims = serde_json::from_slice::<Claims>(&bytes).ok()?;
+    claims.iat
 }

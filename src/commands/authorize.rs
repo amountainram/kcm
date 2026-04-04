@@ -2,7 +2,7 @@ use super::{coalesce_realm, load_context_or_current, save_config};
 use crate::{
     Error, Result,
     cli::OutputFormat,
-    client::{RealmClient, keycloak},
+    client::{AccessToken, AdminCliClient, AuthAccessToken},
 };
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use colored::Colorize;
@@ -11,7 +11,7 @@ use std::{
     fmt,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tracing::{debug, error};
+use tracing::error;
 
 const LABEL_WIDTH: usize = 20;
 
@@ -69,7 +69,7 @@ pub fn logout(name: Option<String>) -> Result<()> {
 }
 
 pub fn login(name: Option<String>, realm: String) -> Result<()> {
-    let (name, mut ctx, mut config) = load_context_or_current(name.as_deref())?;
+    let (name, ctx, mut config) = load_context_or_current(name.as_deref())?;
 
     let server_url = match &ctx.server_url {
         Some(s) => s.clone(),
@@ -83,66 +83,15 @@ pub fn login(name: Option<String>, realm: String) -> Result<()> {
         }
     };
 
-    // 1. check existing token
-    if let Some(stored) = ctx.get_token()? {
-        if let Ok(auth) = serde_json::from_str::<keycloak::AuthAccessToken>(&stored) {
-            let now = now_epoch();
-            let iat = token_iat(&auth.access_token).unwrap_or(now);
-
-            // still valid → nothing to do
-            if iat + auth.expires_in > now {
-                debug!("access token still valid");
-                println!("already logged in!");
-                return Ok(());
-            }
-
-            // 2. try refresh
-            if let Some(ref rt) = auth.refresh_token {
-                let refresh_ok = auth.refresh_expires_in.is_none_or(|rei| iat + rei > now);
-
-                if refresh_ok {
-                    debug!("refreshing access token");
-                    let resolved = ctx.resolved()?;
-                    let client = RealmClient::builder()
-                        .server_url(server_url.clone())
-                        .realm(realm.clone())
-                        .context(resolved)
-                        .build();
-
-                    match client.refresh(rt) {
-                        Ok(token) => {
-                            ctx.set_token(&name, &serde_json::to_string(&token)?)?;
-                            config.contexts.entry(name).insert_entry(ctx);
-                            println!("refreshed!");
-                            return save_config(&config);
-                        }
-                        Err(e) => {
-                            debug!(
-                                ?e,
-                                "refresh failed, \
-                                 falling back to \
-                                 password grant"
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // 3. full password grant
-    let resolved = ctx.resolved()?;
-    let client = RealmClient::builder()
-        .server_url(server_url)
-        .realm(realm)
-        .context(resolved)
+    let mut client = AdminCliClient::builder()
+        .name(name)
+        .server_url(server_url.clone())
+        .realm(realm.clone())
+        .context(ctx)
         .build();
+    client.refresh()?;
 
-    let token = client.token().inspect_err(|error| {
-        error!(?error, "failed to retrieve access token");
-    })?;
-
-    ctx.set_token(&name, &serde_json::to_string(&token)?)?;
+    let (name, ctx) = client.consume();
     config.contexts.entry(name).insert_entry(ctx);
 
     println!("logged in!");
@@ -150,34 +99,14 @@ pub fn login(name: Option<String>, realm: String) -> Result<()> {
     save_config(&config)
 }
 
-fn token_iat(jwt: &str) -> Option<i64> {
-    #[derive(serde::Deserialize)]
-    struct Claims {
-        iat: Option<i64>,
-    }
-    let payload = jwt.split('.').nth(1)?;
-    let bytes = BASE64_URL_SAFE_NO_PAD.decode(payload).ok()?;
-    let claims = serde_json::from_slice::<Claims>(&bytes).ok()?;
-    claims.iat
-}
-
 pub fn status(name: Option<String>, realm: String, format: OutputFormat) -> Result<()> {
-    let (_, ctx, _) = load_context_or_current(name.as_deref())?;
+    let (name, ctx, _) = load_context_or_current(name.as_deref())?;
     let (token, refresh_expires_in) = match ctx.get_token()? {
-        Some(token_json) => {
-            let keycloak::AuthAccessToken {
-                access_token,
-                refresh_expires_in,
-                ..
-            } = serde_json::from_str(&token_json).inspect_err(|error| {
-                error!(
-                    ?error,
-                    "failed to deserialize stored \
-                         access token"
-                );
-            })?;
-            (access_token, refresh_expires_in)
-        }
+        Some(AuthAccessToken {
+            access_token,
+            refresh_expires_in,
+            ..
+        }) => (access_token, refresh_expires_in),
         None => {
             println!("no token found on current context. use \"authorize login\" to obtain one");
             return Ok(());
@@ -203,10 +132,11 @@ pub fn status(name: Option<String>, realm: String, format: OutputFormat) -> Resu
         }
     };
 
-    let client = RealmClient::builder()
+    let client = AdminCliClient::builder()
+        .name(name)
         .server_url(server_url)
         .realm(realm)
-        .context(ctx.resolved()?)
+        .context(ctx)
         .build();
 
     let jwks = client.jwks()?;
@@ -220,23 +150,34 @@ pub fn status(name: Option<String>, realm: String, format: OutputFormat) -> Resu
         })
         .map_err(|e| Error::msg(format!("failed to decode token header: {e}")))?;
 
-    let kid = header
-        .kid
-        .ok_or_else(|| Error::msg("token has no kid header"))?;
-    let jwk = jwks
-        .find(&kid)
-        .ok_or_else(|| Error::msg(format!("no matching key found in jwks for kid: {kid}")))?;
+    let kid = header.kid.ok_or_else(|| {
+        let error = Error::msg("token has no kid header");
+        error!(?error, "failed to use token header");
+        println!(r#"invalid authorization status. use "authorize login" to restart."#);
+        return error;
+    })?;
+    let jwk = jwks.find(&kid).ok_or_else(|| {
+        let error = Error::msg(format!("no matching key found in jwks for kid: {kid}"));
+        error!(?error, "failed to use token header");
+        println!(r#"invalid authorization status. use "authorize login" to restart."#);
+        return error;
+    })?;
 
-    let decoding_key = DecodingKey::try_from(jwk)
-        .map_err(|e| Error::msg(format!("failed to build decoding key: {e}")))?;
+    let decoding_key = DecodingKey::try_from(jwk).map_err(|error| {
+        error!(?error, "failed to build decoding key");
+        println!(r#"invalid authorization status. use "authorize login" to restart."#);
+        return error;
+    })?;
 
     let mut validation = Validation::new(header.alg);
     validation.validate_aud = false;
 
-    let token_data =
-        jsonwebtoken::decode::<keycloak::AccessToken>(&token, &decoding_key, &validation)
-            .inspect_err(|error| error!(?error, "failed to validate token"))
-            .map_err(Error::from);
+    let token_data = jsonwebtoken::decode::<AccessToken>(&token, &decoding_key, &validation)
+        .inspect_err(|error| {
+            error!(?error, "failed to validate token");
+            println!(r#"invalid authorization status. use "authorize login" to restart."#);
+        })
+        .map_err(Error::from);
 
     let (result, t) = match token_data {
         Ok(t) => (Ok(()), t.claims),
@@ -246,7 +187,7 @@ pub fn status(name: Option<String>, realm: String, format: OutputFormat) -> Resu
             let claims = BASE64_URL_SAFE_NO_PAD
                 .decode(*claims)
                 .inspect_err(|error| error!(?error, claims, "failed to decode claims"))?;
-            let claims = serde_json::from_slice::<keycloak::AccessToken>(&claims)
+            let claims = serde_json::from_slice::<AccessToken>(&claims)
                 .inspect_err(|error| error!(?error, "failed to parse claims"))?;
             (Err(error), claims)
         }
