@@ -1,5 +1,5 @@
 use super::{Config, Context, current_context, load_config, save_config};
-use crate::{Error, Result, cli::OutputFormat, out, outfmt};
+use crate::{Error, Result, cli::OutputFormat, commands::default_auth_realm, out, outfmt};
 use std::{
     io::{IsTerminal, Write, stderr, stdin},
     process::{Command, Stdio},
@@ -24,8 +24,9 @@ fn print_context(name: &str, ctx: &Context, active: bool) {
     if let Some(server) = &ctx.server_url {
         out!("    {} {server}", "server-url:".dimmed());
     }
-    if let Some(realm) = &ctx.realm {
-        out!("    {} {realm}", "realm:".dimmed());
+    out!("    {} {}", "realm:".dimmed(), ctx.realm);
+    if let Some(realm) = &ctx.working_realm {
+        out!("    {} {realm}", "working_realm:".dimmed());
     }
     if let Some(user) = &ctx.username {
         out!("    {} {user}", "username:".dimmed());
@@ -203,6 +204,7 @@ pub fn show(format: OutputFormat) -> Result<()> {
     } else {
         outfmt!(format, "no active context");
     }
+
     Ok(())
 }
 
@@ -229,7 +231,8 @@ pub fn create(
 
     let mut ctx = Context {
         server_url,
-        realm,
+        realm: realm.unwrap_or_else(default_auth_realm),
+        working_realm: None,
         username,
         password: None,
         token: None,
@@ -293,7 +296,7 @@ pub fn update(
             let _ = entry.server_url.insert(server_url);
         }
         if let Some(realm) = realm {
-            let _ = entry.realm.insert(realm);
+            entry.realm = realm;
         }
         if let Some(username) = username {
             let _ = entry.username.insert(username);

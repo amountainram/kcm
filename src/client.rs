@@ -1,9 +1,13 @@
 use crate::{Error, Result, commands::Context};
-pub use keycloak::{AccessToken, AuthAccessToken};
+pub use keycloak::{AccessToken, AuthAccessToken, ClientRepresentation};
 use serde::Deserialize;
+use std::fmt;
 use tracing::{debug, error};
 use typed_builder::TypedBuilder;
-use ureq::{Body, http::Response};
+use ureq::{
+    Body,
+    http::{HeaderValue, Response, header::AUTHORIZATION},
+};
 
 mod keycloak {
     include!(concat!(env!("OUT_DIR"), "/keycloak.rs"));
@@ -99,7 +103,6 @@ fn handle_response(res: Response<Body>) -> Result<Response<Body>> {
 pub struct AdminCliClient {
     name: String,
     server_url: String,
-    realm: String,
     context: Context,
 }
 
@@ -113,11 +116,18 @@ impl AdminCliClient {
     }
 
     pub fn realm(&self) -> &str {
-        &self.realm
+        &self.context.realm
+    }
+
+    fn endpoint<S>(&self, path: S) -> String
+    where
+        S: fmt::Display,
+    {
+        format!("{}{}", self.server_url(), path)
     }
 
     fn openid_configuration(&self) -> Result<keycloak::OpenidConfiguration> {
-        let realm = self.realm.as_str();
+        let realm = self.realm();
         let openid_config_url = format!(
             "{}/realms/{}/.well-known/openid-configuration",
             self.server_url, realm
@@ -138,7 +148,7 @@ impl AdminCliClient {
         as_json(res).inspect(|jwks| {
             debug!(
                 server_url = self.server_url,
-                realm = self.realm,
+                realm = self.realm(),
                 openid_config = serde_json::to_string(&openid_config).unwrap_or_default(),
                 jwks = serde_json::to_string(&jwks).unwrap_or_default(),
                 "jwks"
@@ -248,6 +258,58 @@ impl AdminCliClient {
 
     pub fn consume(self) -> (String, Context) {
         (self.name, self.context)
+    }
+
+    fn authorize(&mut self) -> Result<HeaderValue> {
+        let AuthAccessToken {
+            access_token,
+            token_type,
+            ..
+        } = self.refresh()?;
+        let auth = format!(
+            "{} {access_token}",
+            token_type.as_deref().unwrap_or("Bearer")
+        );
+        Ok(HeaderValue::from_str(&auth).inspect_err(|error| {
+            error!(%error, "invalid authorization header bytes");
+        })?)
+    }
+}
+
+// clients
+
+impl AdminCliClient {
+    pub fn clients_list(
+        &mut self,
+        realm: &str,
+        page_size: u64,
+        offset: u64,
+        search: Option<&str>,
+    ) -> Result<Vec<keycloak::ClientRepresentation>> {
+        let auth_header = self.authorize()?;
+
+        let endpoint = self.endpoint(keycloak::paths::realms_realm_clients_get(realm));
+        let mut query = vec![
+            ("max", page_size.to_string()),
+            ("first", offset.to_string()),
+        ];
+        if let Some(search) = search {
+            query.push(("clientId", search.to_string()));
+            query.push(("search", "true".to_string()));
+        }
+        let res = ureq::get(&endpoint)
+            .query_pairs(query)
+            .header(AUTHORIZATION, auth_header)
+            .call()
+            .inspect_err(|error| error!(%error, endpoint, "http failure"))?;
+        let res = handle_response(res)?;
+        as_json::<Vec<keycloak::ClientRepresentation>>(res).inspect_err(|error| {
+            error!(
+                %error,
+                endpoint,
+                "failed to deserialize list of clients"
+            );
+        })
     }
 }
 

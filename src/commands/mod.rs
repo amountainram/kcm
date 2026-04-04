@@ -1,6 +1,6 @@
-use crate::{Error, Result, cli::OutputFormat, client::AuthAccessToken, out};
+use crate::{Error, Result, cli::OutputFormat, client::AuthAccessToken, out, outfmt};
 pub use colored::Color;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::{
     borrow::Cow,
     collections::BTreeMap,
@@ -38,17 +38,33 @@ impl<T> fmt::Display for Sensitive<T> {
     }
 }
 
+fn deserialize_server_url<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?
+        .map(|s| s.strip_suffix('/').map(String::from).unwrap_or(s)))
+}
+
+fn default_auth_realm() -> String {
+    "master".to_string()
+}
+
 #[derive(Default, Clone, Deserialize, Serialize)]
 pub struct Context {
     #[serde(
         rename = "server-url",
         alias = "server_url",
         alias = "serverUrl",
+        default,
+        deserialize_with = "deserialize_server_url",
         skip_serializing_if = "Option::is_none"
     )]
     pub server_url: Option<String>,
-    #[serde(rename = "realm", skip_serializing_if = "Option::is_none")]
-    pub realm: Option<String>,
+    #[serde(rename = "realm", default = "default_auth_realm")]
+    pub realm: String,
+    #[serde(rename = "working-realm", skip_serializing_if = "Option::is_none")]
+    pub working_realm: Option<String>,
     #[serde(rename = "username", skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
     #[serde(rename = "password", skip_serializing_if = "Option::is_none")]
@@ -279,6 +295,23 @@ fn current_context() -> Result<Option<(String, Context)>> {
         .transpose()?)
 }
 
+fn enforce_context(format: OutputFormat) -> Result<(String, Context)> {
+    current_context()
+        .inspect_err(|err| {
+            if matches!(err, Error::ContextNotFound) {
+                outfmt!(
+                    format,
+                    r#"no current context configured —  \
+                    select one with "context use""#
+                );
+            }
+        })?
+        .ok_or_else(|| {
+            outfmt!(format, "no active context");
+            Error::ContextSelection
+        })
+}
+
 fn load_context_or_current(name: Option<&str>) -> Result<(String, Context, Config)> {
     let config = load_config()?;
     let context_entry = name.and_then(|name| {
@@ -298,10 +331,6 @@ fn load_context_or_current(name: Option<&str>) -> Result<(String, Context, Confi
                 .ok_or_else(|| Error::ContextSelection)
         }
     }
-}
-
-fn coalesce_realm<'a>(ctx: &'a Context, realm: Option<&'a str>) -> Option<&'a str> {
-    ctx.realm.as_deref().or(realm)
 }
 
 const LABEL_WIDTH: usize = 20;

@@ -1,7 +1,6 @@
-use std::fmt;
-
 pub use clap::Parser;
 use clap::{Subcommand, ValueEnum};
+use std::fmt;
 
 #[derive(Clone, Copy, Default, ValueEnum)]
 pub enum OutputFormat {
@@ -120,9 +119,6 @@ pub enum AuthorizeCommands {
     Login {
         /// Name of the context
         context: Option<String>,
-        /// Login realm
-        #[arg(short = 'r', long = "realm", default_value = "master")]
-        realm: String,
     },
     #[command(name = "logout")]
     Logout {
@@ -133,12 +129,33 @@ pub enum AuthorizeCommands {
     Status {
         /// Name of the context
         context: Option<String>,
-        /// Realm to validate current auth token
-        #[arg(short = 'r', long = "realm", default_value = "master")]
-        realm: String,
         /// Output format
         #[arg(long = "format", default_value = "plain")]
         format: OutputFormat,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ClientsCommands {
+    #[command(name = "list", alias = "ls", alias = "ps")]
+    List {
+        /// Page size for the returned list - format json
+        /// overrides this argument
+        #[arg(
+            short = 'p',
+            long = "page-size",
+            default_value = "10",
+            value_parser = clap::value_parser!(u64).range(1..)
+        )]
+        page_size: u64,
+        /// Output format
+        #[arg(long = "format", default_value = "plain")]
+        format: OutputFormat,
+        /// Working realm
+        #[arg(short = 'r', long = "realm")]
+        realm: Option<String>,
+        /// Search string
+        search: Option<String>,
     },
 }
 
@@ -155,6 +172,15 @@ pub enum Commands {
     Authorize {
         #[command(subcommand)]
         command: AuthorizeCommands,
+    },
+    /// Manage realm clients
+    #[command(name = "clients", alias = "c")]
+    Clients {
+        #[command(subcommand)]
+        command: ClientsCommands,
+        /// Login realm
+        #[arg(short = 'r', long = "realm")]
+        realm: Option<String>,
     },
 }
 

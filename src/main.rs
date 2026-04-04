@@ -1,4 +1,4 @@
-use crate::cli::AuthorizeCommands;
+use crate::cli::{AuthorizeCommands, ClientsCommands, OutputFormat};
 use cli::{Args, Commands, ContextCommands, Parser};
 pub use error::{Error, Result};
 use std::{
@@ -63,13 +63,47 @@ fn context_action(command: ContextCommands) -> Result<()> {
 
 fn authorize_action(command: AuthorizeCommands) -> Result<()> {
     match command {
-        AuthorizeCommands::Status {
-            context,
-            realm,
-            format,
-        } => commands::authorize::status(context, realm, format),
-        AuthorizeCommands::Login { context, realm } => commands::authorize::login(context, realm),
+        AuthorizeCommands::Status { context, format } => {
+            commands::authorize::status(context, format)
+        }
+        AuthorizeCommands::Login { context } => commands::authorize::login(context),
         AuthorizeCommands::Logout { context } => commands::authorize::logout(context),
+    }
+}
+
+fn exclude_realms(
+    format: Option<OutputFormat>,
+    outer: Option<String>,
+    inner: Option<String>,
+) -> Result<Option<String>> {
+    match (outer, inner) {
+        (Some(_), Some(_)) => {
+            let msg = "realm specified in multiple positions";
+            if let Some(f) = format {
+                outfmt!(f, "{msg}");
+            } else {
+                out!("{msg}");
+            }
+            Err(Error::TooManyArguments)
+        }
+        (Some(x), _) | (_, Some(x)) => Ok(Some(x)),
+        _ => Ok(None),
+    }
+}
+
+fn clients_action(command: ClientsCommands, cmd_realm: Option<String>) -> Result<()> {
+    match command {
+        ClientsCommands::List {
+            page_size,
+            format,
+            realm,
+            search,
+        } => commands::clients::list(
+            page_size,
+            format,
+            exclude_realms(Some(format), cmd_realm, realm)?,
+            search,
+        ),
     }
 }
 
@@ -84,6 +118,7 @@ fn main() -> ExitCode {
         let result = match command {
             Commands::Context { command } => context_action(command),
             Commands::Authorize { command } => authorize_action(command),
+            Commands::Clients { command, realm } => clients_action(command, realm),
         }
         .inspect_err(|error| {
             if tracing::enabled!(tracing::Level::DEBUG) {

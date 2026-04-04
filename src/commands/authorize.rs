@@ -1,4 +1,4 @@
-use super::{Color, Printer, coalesce_realm, load_context_or_current, save_config};
+use super::{Color, Printer, load_context_or_current, save_config};
 use crate::{
     Error, Result,
     cli::OutputFormat,
@@ -62,7 +62,7 @@ pub fn logout(name: Option<String>) -> Result<()> {
     save_config(&config)
 }
 
-pub fn login(name: Option<String>, realm: String) -> Result<()> {
+pub fn login(name: Option<String>) -> Result<()> {
     let (name, ctx, mut config) = load_context_or_current(name.as_deref()).inspect_err(|err| {
         if matches!(err, Error::ContextSelection) {
             out!(
@@ -86,7 +86,6 @@ pub fn login(name: Option<String>, realm: String) -> Result<()> {
     let mut client = AdminCliClient::builder()
         .name(name)
         .server_url(server_url.clone())
-        .realm(realm.clone())
         .context(ctx)
         .build();
     client
@@ -120,7 +119,7 @@ pub fn login(name: Option<String>, realm: String) -> Result<()> {
     save_config(&config)
 }
 
-pub fn status(name: Option<String>, realm: String, format: OutputFormat) -> Result<()> {
+pub fn status(name: Option<String>, format: OutputFormat) -> Result<()> {
     let (name, ctx, _) = load_context_or_current(name.as_deref()).inspect_err(|err| {
         if matches!(err, Error::ContextSelection) {
             outfmt!(
@@ -160,23 +159,9 @@ pub fn status(name: Option<String>, realm: String, format: OutputFormat) -> Resu
         }
     };
 
-    let realm = match coalesce_realm(&ctx, Some(realm.as_str())) {
-        Some(r) => r.to_string(),
-        None => {
-            outfmt!(
-                format,
-                "cannot find realm on current context —  \
-                 use \"context update --realm <realm>\""
-            );
-
-            return Err(Error::MissingArgument);
-        }
-    };
-
     let client = AdminCliClient::builder()
         .name(name)
         .server_url(server_url)
-        .realm(realm)
         .context(ctx)
         .build();
 
