@@ -3,6 +3,7 @@ use crate::{
     Error, Result,
     cli::OutputFormat,
     client::{AccessToken, AdminCliClient, AuthAccessToken},
+    out,
 };
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use colored::Colorize;
@@ -11,7 +12,7 @@ use std::{
     fmt,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tracing::error;
+use tracing::{debug, error};
 
 const LABEL_WIDTH: usize = 20;
 
@@ -58,7 +59,14 @@ fn fmt_relative(secs: i64) -> String {
 }
 
 pub fn logout(name: Option<String>) -> Result<()> {
-    let (name, ctx, mut config) = load_context_or_current(name.as_deref())?;
+    let (name, ctx, mut config) = load_context_or_current(name.as_deref()).inspect_err(|err| {
+        if matches!(err, Error::ContextSelection) {
+            out!(
+                "no context name given and no active context —  \
+                 pass a name or set one with \"context use\""
+            );
+        }
+    })?;
 
     ctx.delete_token()?;
     config.contexts.entry(name).insert_entry(ctx);
@@ -69,15 +77,21 @@ pub fn logout(name: Option<String>) -> Result<()> {
 }
 
 pub fn login(name: Option<String>, realm: String) -> Result<()> {
-    let (name, ctx, mut config) = load_context_or_current(name.as_deref())?;
+    let (name, ctx, mut config) = load_context_or_current(name.as_deref()).inspect_err(|err| {
+        if matches!(err, Error::ContextSelection) {
+            out!(
+                "no context name given and no active context —  \
+                 pass a name or set one with \"context use\""
+            );
+        }
+    })?;
 
     let server_url = match &ctx.server_url {
         Some(s) => s.clone(),
         None => {
             println!(
-                "cannot find server-url on current \
-                 context. use \"context update \
-                 --server-url <url>\""
+                "cannot find server-url on current context —  \
+                 use \"context update --server-url <url>\""
             );
             return Err(Error::msg("missing server-url"));
         }
@@ -89,7 +103,19 @@ pub fn login(name: Option<String>, realm: String) -> Result<()> {
         .realm(realm.clone())
         .context(ctx)
         .build();
-    client.refresh()?;
+    client.refresh().inspect_err(|err| {
+        if matches!(err, Error::ContextMissingUsername) {
+            out!(
+                "cannot find username on current context —  \
+                 use \"context update --username <username>\""
+            );
+        } else if matches!(err, Error::ContextMissingPassword) {
+            out!(
+                "cannot find password on current context —  \
+                 use \"context update --username <username>\""
+            );
+        }
+    })?;
 
     let (name, ctx) = client.consume();
     config.contexts.entry(name).insert_entry(ctx);
@@ -100,7 +126,14 @@ pub fn login(name: Option<String>, realm: String) -> Result<()> {
 }
 
 pub fn status(name: Option<String>, realm: String, format: OutputFormat) -> Result<()> {
-    let (name, ctx, _) = load_context_or_current(name.as_deref())?;
+    let (name, ctx, _) = load_context_or_current(name.as_deref()).inspect_err(|err| {
+        if matches!(err, Error::ContextSelection) {
+            out!(
+                "no context name given and no active context —  \
+                 pass a name or set one with \"context use\""
+            );
+        }
+    })?;
     let (token, refresh_expires_in) = match ctx.get_token()? {
         Some(AuthAccessToken {
             access_token,
@@ -108,7 +141,11 @@ pub fn status(name: Option<String>, realm: String, format: OutputFormat) -> Resu
             ..
         }) => (access_token, refresh_expires_in),
         None => {
-            println!("no token found on current context. use \"authorize login\" to obtain one");
+            out!(
+                "no token found on current context —  \
+                 use \"authorize login\" to obtain one"
+            );
+
             return Ok(());
         }
     };
@@ -116,19 +153,24 @@ pub fn status(name: Option<String>, realm: String, format: OutputFormat) -> Resu
     let server_url = match &ctx.server_url {
         Some(s) => s.clone(),
         None => {
-            println!(
-                r#"cannot find server-url on current context. use "context update --server-url <url>""#
+            out!(
+                "cannot find server-url on current context —  \
+                 use \"context update --server-url <url>\""
             );
-            return Err(Error::msg("missing server-url"));
+
+            return Err(Error::MissingArgument);
         }
     };
+
     let realm = match coalesce_realm(&ctx, Some(realm.as_str())) {
         Some(r) => r.to_string(),
         None => {
-            println!(
-                r#"cannot find realm on current context. use "context update --realm <realm>""#
+            out!(
+                "cannot find realm on current context —  \
+                 use \"context update --realm <realm>\""
             );
-            return Err(Error::msg("missing realm"));
+
+            return Err(Error::MissingArgument);
         }
     };
 
@@ -140,32 +182,60 @@ pub fn status(name: Option<String>, realm: String, format: OutputFormat) -> Resu
         .build();
 
     let jwks = client.jwks()?;
-    let header = decode_header(&token)
-        .inspect_err(|error| {
-            error!(
-                ?error,
-                jwks = serde_json::to_string(&jwks).unwrap_or_default(),
-                "failed to decode token header"
-            )
-        })
-        .map_err(|e| Error::msg(format!("failed to decode token header: {e}")))?;
+    let header = decode_header(&token).inspect_err(|error| {
+        error!(
+            %error,
+            jwks = serde_json::to_string(&jwks).unwrap_or_default(),
+            "failed to decode token header"
+        )
+    })?;
 
     let kid = header.kid.ok_or_else(|| {
-        let error = Error::msg("token has no kid header");
-        error!(?error, "failed to use token header");
-        println!(r#"invalid authorization status. use "authorize login" to restart."#);
-        return error;
+        debug!(
+            jwks = serde_json::to_string(&jwks).unwrap_or_default(),
+            %token,
+            "validation context"
+        );
+
+        out!(
+            "invalid authorization status —  \
+             use \"authorize login\""
+        );
+
+        return Error::JwtMissingKid;
     })?;
+
     let jwk = jwks.find(&kid).ok_or_else(|| {
-        let error = Error::msg(format!("no matching key found in jwks for kid: {kid}"));
-        error!(?error, "failed to use token header");
-        println!(r#"invalid authorization status. use "authorize login" to restart."#);
-        return error;
+        debug!(
+            kid,
+            jwks = serde_json::to_string(&jwks).unwrap_or_default(),
+            %token,
+            "validation context"
+        );
+
+        out!(
+            "invalid authorization status —  \
+             use \"authorize login\""
+        );
+
+        return Error::JwksMissingKid;
     })?;
 
     let decoding_key = DecodingKey::try_from(jwk).map_err(|error| {
-        error!(?error, "failed to build decoding key");
-        println!(r#"invalid authorization status. use "authorize login" to restart."#);
+        debug!(
+            kid,
+            jwks = serde_json::to_string(&jwks).unwrap_or_default(),
+            %token,
+            "validation context"
+        );
+
+        error!(%error, kid, "failed to build decoding key");
+
+        out!(
+            "invalid authorization status —  \
+             use \"authorize login\""
+        );
+
         return error;
     })?;
 
@@ -174,21 +244,27 @@ pub fn status(name: Option<String>, realm: String, format: OutputFormat) -> Resu
 
     let token_data = jsonwebtoken::decode::<AccessToken>(&token, &decoding_key, &validation)
         .inspect_err(|error| {
-            error!(?error, "failed to validate token");
-            println!(r#"invalid authorization status. use "authorize login" to restart."#);
-        })
-        .map_err(Error::from);
+            debug!(
+                kid,
+                jwks = serde_json::to_string(&jwks).unwrap_or_default(),
+                %token,
+                ?validation,
+                "validation context"
+            );
+
+            error!(%error, kid, "failed to validate token");
+        });
 
     let (result, t) = match token_data {
         Ok(t) => (Ok(()), t.claims),
         Err(error) => {
             let claims = token.split('.').skip(1).take(1).collect::<Vec<_>>();
-            let claims = claims.first().ok_or(Error::msg("invalid claims"))?;
+            let claims = claims.first().ok_or(Error::JwtInvalidClaims)?;
             let claims = BASE64_URL_SAFE_NO_PAD
                 .decode(*claims)
-                .inspect_err(|error| error!(?error, claims, "failed to decode claims"))?;
+                .inspect_err(|error| error!(%error, claims, "failed to decode claims"))?;
             let claims = serde_json::from_slice::<AccessToken>(&claims)
-                .inspect_err(|error| error!(?error, "failed to parse claims"))?;
+                .inspect_err(|error| error!(%error, "failed to parse claims"))?;
             (Err(error), claims)
         }
     };
@@ -246,7 +322,11 @@ pub fn status(name: Option<String>, realm: String, format: OutputFormat) -> Resu
             }
             println!(
                 "{}",
-                serde_json::to_string_pretty(&serde_json::Value::Object(map))?
+                serde_json::to_string_pretty(&serde_json::Value::Object(map)).inspect_err(
+                    |error| {
+                        error!(%error, "failed to serialize token claims");
+                    }
+                )?
             );
         }
         OutputFormat::Plain => {
@@ -312,5 +392,10 @@ pub fn status(name: Option<String>, realm: String, format: OutputFormat) -> Resu
         }
     }
 
-    result
+    Ok(result.inspect_err(|_| {
+        out!(
+            "invalid authorization status —  \
+             use \"authorize login\""
+        );
+    })?)
 }

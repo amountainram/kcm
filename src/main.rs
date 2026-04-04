@@ -1,12 +1,27 @@
 use crate::cli::AuthorizeCommands;
 use cli::{Args, Commands, ContextCommands, Parser};
-pub use error::{Context, Error, Result};
-use std::{env, io::Write, process::ExitCode};
+pub use error::{Error, Result};
+use std::{
+    env,
+    io::{self, Write},
+    process::ExitCode,
+};
+use tracing::error;
 
 mod cli;
 mod client;
 mod commands;
 mod error;
+
+#[macro_export]
+macro_rules! out {
+    () => {
+        println!("\n");
+    };
+    ($($arg:tt)*) => {{
+        println!($($arg)*);
+    }};
+}
 
 fn context_action(command: ContextCommands) -> Result<()> {
     match command {
@@ -50,26 +65,30 @@ fn authorize_action(command: AuthorizeCommands) -> Result<()> {
 fn main() -> ExitCode {
     let Args { command } = Args::parse();
 
-    if logger_try_init().is_err() {
-        return ExitCode::FAILURE;
-    }
+    (|| {
+        logger_try_init().inspect_err(|error| {
+            error!(%error, "failed to initialize logger");
+        })?;
 
-    let result = match command {
-        Commands::Context { command } => context_action(command),
-        Commands::Authorize { command } => authorize_action(command),
-    }
-    .inspect_err(|error| {
-        if tracing::enabled!(tracing::Level::DEBUG) {
-            tracing::error!(?error, "error on exit");
+        let result = match command {
+            Commands::Context { command } => context_action(command),
+            Commands::Authorize { command } => authorize_action(command),
         }
-    });
+        .inspect_err(|error| {
+            if tracing::enabled!(tracing::Level::DEBUG) {
+                error!(?error, "error on exit");
+            }
+        });
 
-    let _ = std::io::stderr().flush();
+        let _ = io::stderr()
+            .flush()
+            .inspect_err(|error| error!(%error, "failed to flush stderr"));
 
-    result
-        .is_ok()
-        .then_some(ExitCode::SUCCESS)
-        .unwrap_or(ExitCode::FAILURE)
+        result
+    })()
+    .is_ok()
+    .then_some(ExitCode::SUCCESS)
+    .unwrap_or(ExitCode::FAILURE)
 }
 
 fn logger_try_init() -> Result<()> {
@@ -108,9 +127,8 @@ fn logger_try_init() -> Result<()> {
 
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::try_from_default_env()?)
-        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
-        .try_init()
-        .with_context(|| "failed to initialize logger")?;
+        .with(tracing_subscriber::fmt::layer().with_writer(io::stderr))
+        .try_init()?;
 
     Ok(())
 }

@@ -1,4 +1,4 @@
-use crate::{Context as _, Error, Result, client::AuthAccessToken};
+use crate::{Error, Result, client::AuthAccessToken};
 use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
@@ -59,60 +59,66 @@ const KEYRING_SERVICE: &str = "kcm";
 impl Context {
     fn keyring_entry(name: &str, field: &str) -> Result<keyring::Entry> {
         let key = format!("{name}/{field}");
-        keyring::Entry::new(KEYRING_SERVICE, &key)
-            .map_err(|e| Error::msg(format!("keyring error: {e}")))
+        Ok(keyring::Entry::new(KEYRING_SERVICE, &key)?)
     }
 
     fn keyring_read(key: &str) -> Result<Option<String>> {
-        let entry = keyring::Entry::new(KEYRING_SERVICE, key)
-            .map_err(|e| Error::msg(format!("keyring error: {e}")))?;
+        let entry = keyring::Entry::new(KEYRING_SERVICE, key)?;
         match entry.get_password() {
             Ok(s) => Ok(Some(s)),
             Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(Error::msg(format!("failed to read from keyring: {e}"))),
+            Err(e) => Err(Error::from(e)),
         }
     }
 
     fn keyring_remove(key: &str) -> Result<()> {
-        let entry = keyring::Entry::new(KEYRING_SERVICE, key)
-            .map_err(|e| Error::msg(format!("keyring error: {e}")))?;
+        let entry = keyring::Entry::new(KEYRING_SERVICE, key)?;
         match entry.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(Error::msg(format!("failed to delete from keyring: {e}"))),
+            Err(e) => Err(Error::from(e)),
         }
     }
 
     pub fn set_password(&mut self, name: &str, value: &str) -> Result<()> {
-        let entry = Self::keyring_entry(name, "password")?;
+        let entry = Self::keyring_entry(name, "password").inspect_err(
+            |error| error!(%error, name, "failed to reserve password entry in OS keyring"),
+        )?;
         entry
             .set_password(value)
-            .map_err(|e| Error::msg(format!("failed to store password in keyring: {e}")))?;
+            .inspect_err(|error| error!(%error, name, "failed to store password in OS keyring"))?;
         self.password = Some(Sensitive::from(format!("{name}/password")));
         Ok(())
     }
 
     pub fn get_password(&self) -> Result<Option<String>> {
         match &self.password {
-            Some(key_ref) => Self::keyring_read(key_ref.read()),
+            Some(key_ref) => Self::keyring_read(key_ref.read()).inspect_err(|error| {
+                error!(%error, "failed to retrieve password from OS keyring");
+            }),
             None => Ok(None),
         }
     }
 
     pub fn set_token(&mut self, name: &str, at: &AuthAccessToken) -> Result<()> {
-        let value = &serde_json::to_string(&at)
-            .inspect_err(|error| error!(?error, "failed to store secret in OS keyring"))?;
-        let entry = Self::keyring_entry(name, "token")?;
+        let value = &serde_json::to_vec(&at)
+            .inspect_err(|error| error!(%error, name, "failed to serialize token"))?;
+        let entry = Self::keyring_entry(name, "token").inspect_err(
+            |error| error!(%error, name, "failed to reserve token entry in OS keyring"),
+        )?;
         entry
-            .set_password(value)
-            .map_err(|e| Error::msg(format!("failed to store token in keyring: {e}")))?;
+            .set_secret(&value)
+            .inspect_err(|error| error!(%error, name, "failed to store token in OS keyring"))?;
         self.token = Some(Sensitive::from(format!("{name}/token")));
+
         Ok(())
     }
 
     pub fn delete_token(&self) -> Result<()> {
         if let Some(key_ref) = &self.token {
-            Self::keyring_remove(key_ref.read())?;
+            Self::keyring_remove(key_ref.read())
+                .inspect_err(|error| error!(%error, "failed to remove token from OS keyring"))?;
         }
+
         Ok(())
     }
 
@@ -120,7 +126,7 @@ impl Context {
         match &self.token {
             Some(key_ref) => Self::keyring_read(key_ref.read())
                 .inspect_err(|error| {
-                    error!(?error, "failed to retrieve token from OS keyring");
+                    error!(%error, "failed to retrieve token from OS keyring");
                 })
                 .map_err(Error::from)
                 .and_then(|at| match at {
@@ -128,7 +134,7 @@ impl Context {
                     Some(at) => Ok(Some(
                         serde_json::from_str(&at)
                             .inspect_err(|error| {
-                                error!(?error, "failed to deserialize token from OS keyring");
+                                error!(%error, "failed to deserialize token from OS keyring");
                             })
                             .map_err(Error::from)?,
                     )),
@@ -139,10 +145,12 @@ impl Context {
 
     pub fn delete_secrets(&self) -> Result<()> {
         if let Some(key_ref) = &self.password {
-            Self::keyring_remove(key_ref.read())?;
+            Self::keyring_remove(key_ref.read())
+                .inspect_err(|error| error!(%error, "failed to remove password from OS keyring"))?;
         }
         if let Some(key_ref) = &self.token {
-            Self::keyring_remove(key_ref.read())?;
+            Self::keyring_remove(key_ref.read())
+                .inspect_err(|error| error!(%error, "failed to remove token from OS keyring"))?;
         }
         Ok(())
     }
@@ -168,13 +176,8 @@ fn build_config_path() -> Result<PathBuf> {
             if matches!(e, env::VarError::NotPresent) {
                 Ok(dirs::config_dir()
                     .ok_or_else(|| {
-                        let error = Error::msg("invalid config dir");
-                        error!(
-                            env = KCM_CONFIG,
-                            ?error,
-                            "failed to find a defautl config dir"
-                        );
-                        error
+                        error!(env = KCM_CONFIG, "failed to find a default config dir");
+                        Error::InvalidConfigDir
                     })?
                     .join("kcm")
                     .join("config.json"))
@@ -185,7 +188,7 @@ fn build_config_path() -> Result<PathBuf> {
         .inspect_err(|error| {
             error!(
                 env = KCM_CONFIG,
-                ?error,
+                %error,
                 "failed to parse environment variable"
             );
         })?)
@@ -205,7 +208,7 @@ fn load_config() -> Result<Config> {
             } else {
                 error!(
                     path = %print_path(&path),
-                    ?error,
+                    %error,
                     "failed to read configuration file",
                 );
                 Err(Error::from(error))
@@ -213,7 +216,7 @@ fn load_config() -> Result<Config> {
         },
         |c| {
             Ok(serde_json::from_str(&c).inspect_err(|error| {
-                error!(path = %print_path(&path), ?error, "invalid configuration file");
+                error!(path = %print_path(&path), %error, "invalid configuration file");
             })?)
         },
     )
@@ -222,33 +225,36 @@ fn load_config() -> Result<Config> {
 fn save_config(config: &Config) -> Result<()> {
     let path = build_config_path()?;
     let dir = path.parent().ok_or_else(|| {
-        let error = Error::msg("invalid parent path");
         error!(
             path = %print_path(&path),
-            ?error,
             "configuration path must have a parent folder",
         );
-
-        error
+        Error::InvalidParentPath
     })?;
     if dir.exists() && !dir.is_dir() {
         let error = Error::msg("invalid parent path");
         error!(
             path = %print_path(&path),
-            ?error,
+            %error,
             "configuration path parent must be a folder",
         );
-        return Err(error);
+        return Err(Error::InvalidParentPath);
     }
-    fs::create_dir_all(dir).inspect_err(|error| error!(path = %print_path(dir), ?error, "failed to create configuration file directory"))?;
+    fs::create_dir_all(dir).inspect_err(|error| {
+        error!(path = %print_path(dir), %error, "failed to create configuration file directory")
+    })?;
     fs::write(
         &path,
-        serde_json::to_string_pretty(config).inspect_err(|error| error!(path = %print_path(&path), ?error, "configuration content is an invalid json"))?,
+        serde_json::to_string_pretty(config)
+            .inspect_err(|error| {
+                error!(path = %print_path(&path), %error, "configuration content is an invalid json")
+            })?,
     )
-    .inspect_err(|e| {
+    .inspect_err(|error| {
         error!(
-            "failed to write configuration to file '{}': {e:?}",
-            print_path(&path)
+            path = %print_path(&path),
+            %error,
+            "failed to write configuration to file",
         )
     })?;
 
@@ -256,25 +262,22 @@ fn save_config(config: &Config) -> Result<()> {
 }
 
 fn current_context() -> Result<Option<(String, Context)>> {
-    let mut config = load_config().with_context(|| "while loading configuration")?;
+    let mut config =
+        load_config().inspect_err(|error| error!(%error, "failed to load configuration"))?;
     Ok(config
         .current_context
         .map(|name| {
             config
                 .contexts
                 .remove(&name)
-                .map(|context| (name, context))
-                .ok_or_else(|| {
-                    let error = Error::msg("current context not found in configuration");
-                    error!(?error, "invalid configuration");
-                    error
-                })
+                .map(|context| (name.clone(), context))
+                .ok_or_else(|| Error::ContextNotFound)
         })
         .transpose()?)
 }
 
 fn load_context_or_current(name: Option<&str>) -> Result<(String, Context, Config)> {
-    let config = load_config().with_context(|| "while loading configuration")?;
+    let config = load_config()?;
     let context_entry = name.and_then(|name| {
         config
             .contexts
@@ -286,15 +289,10 @@ fn load_context_or_current(name: Option<&str>) -> Result<(String, Context, Confi
         Some((name, context)) => Ok((name, context, config)),
         None => {
             let ctx = current_context().inspect_err(|error| {
-                error!(?error, "failed to load current context");
+                error!(%error, "failed to load current context");
             })?;
-            ctx.map(|(name, context)| (name, context, config)).ok_or_else(|| {
-                let error = Error::msg("no context name");
-                println!(
-                    r#"no context name given and no active context — pass a name or set one with "context use""#
-                );
-                error
-            })
+            ctx.map(|(name, context)| (name, context, config))
+                .ok_or_else(|| Error::ContextSelection)
         }
     }
 }

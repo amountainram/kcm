@@ -1,7 +1,7 @@
 use crate::{Error, Result, commands::Context};
 pub use keycloak::{AccessToken, AuthAccessToken};
 use serde::Deserialize;
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 use typed_builder::TypedBuilder;
 use ureq::{Body, http::Response};
 
@@ -60,7 +60,7 @@ where
         json.inspect_err(|error| {
             error!(
                 status_code = status.as_u16(),
-                ?error,
+                %error,
                 "failed to deserialize json"
             );
         })
@@ -79,7 +79,7 @@ fn handle_response(res: Response<Body>) -> Result<Response<Body>> {
                 .into_body()
                 .read_to_string()
                 .inspect_err(|error| {
-                    error!(status_code = status.as_u16(), ?error, "failed to read body");
+                    error!(status_code = status.as_u16(), %error, "failed to read body");
                 })
                 .unwrap_or_default();
 
@@ -111,7 +111,7 @@ impl AdminCliClient {
             self.server_url, realm
         );
         let res = ureq::get(&openid_config_url).call().inspect_err(|error| {
-            error!(url = %openid_config_url, realm, ?error, "failed to fetch openid configuration")
+            error!(url = %openid_config_url, realm, %error, "failed to fetch openid configuration")
         })?;
         let res = handle_response(res)?;
         as_json(res)
@@ -120,7 +120,7 @@ impl AdminCliClient {
     pub fn jwks(&self) -> Result<jsonwebtoken::jwk::JwkSet> {
         let openid_config = self.openid_configuration()?;
         let res = ureq::get(&openid_config.jwks_uri).call().inspect_err(
-            |error| error!(url = %openid_config.jwks_uri, ?error, "failed to fetch jwks"),
+            |error| error!(url = %openid_config.jwks_uri, %error, "failed to fetch jwks"),
         )?;
         let res = handle_response(res)?;
         as_json(res).inspect(|jwks| {
@@ -138,19 +138,13 @@ impl AdminCliClient {
         let username = match &self.context.username {
             Some(p) => p,
             None => {
-                eprintln!(
-                    r#"cannot find username on current context. use "context update --username <username>""#
-                );
-                return Err(Error::msg("missing username"));
+                return Err(Error::ContextMissingUsername);
             }
         };
         let password = match self.context.get_password()? {
             Some(p) => p,
             None => {
-                eprintln!(
-                    r#"cannot find password on current context. use "context update --password""#
-                );
-                return Err(Error::msg("missing password"));
+                return Err(Error::ContextMissingPassword);
             }
         };
 
@@ -163,11 +157,11 @@ impl AdminCliClient {
                 ("username", username),
                 ("password", &password),
             ])
-            .inspect_err(|error| error!(?error, endpoint = token_endpoint, "http failure"))?;
+            .inspect_err(|error| error!(%error, endpoint = token_endpoint, "http failure"))?;
         let res = handle_response(res)?;
         let at = as_json::<keycloak::AuthAccessToken>(res).inspect_err(|error| {
             error!(
-                ?error,
+                %error,
                 endpoint = token_endpoint,
                 "failed to deserialize token"
             );
@@ -215,7 +209,7 @@ impl AdminCliClient {
         };
         let refresh_ok = iat + rei > now;
         if !refresh_ok {
-            warn!("refresh token expired. attempting to login with sitting grants");
+            debug!("refresh token expired. attempting to login with sitting grants");
             return self.token();
         }
 
@@ -227,11 +221,11 @@ impl AdminCliClient {
                 ("client_id", "admin-cli"),
                 ("refresh_token", &refresh_token),
             ])
-            .inspect_err(|error| error!(?error, endpoint = token_endpoint, "http failure"))?;
+            .inspect_err(|error| error!(%error, endpoint = token_endpoint, "http failure"))?;
         let res = handle_response(res)?;
         let at = as_json(res).inspect_err(|error| {
             error!(
-                ?error,
+                %error,
                 endpoint = token_endpoint,
                 "failed to deserialize refreshed token"
             );

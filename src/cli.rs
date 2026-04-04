@@ -1,3 +1,5 @@
+use std::fmt;
+
 pub use clap::Parser;
 use clap::{Subcommand, ValueEnum};
 
@@ -6,6 +8,19 @@ pub enum OutputFormat {
     #[default]
     Plain,
     Json,
+}
+
+impl fmt::Display for OutputFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::Plain => "plain",
+                Self::Json => "json",
+            }
+        )
+    }
 }
 
 #[derive(Subcommand)]
