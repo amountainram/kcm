@@ -1,4 +1,4 @@
-use super::{Context, OutputFormat, enforce_context};
+use super::{Context, OutputFormat, Printer, enforce_context};
 use crate::{
     Error, Result,
     client::{AdminCliClient, ClientRepresentation},
@@ -127,7 +127,7 @@ pub fn list(
 
     loop {
         let next_page = client
-            .clients_list(&working_realm, page_size, offset, search.as_deref())
+            .clients_list(&working_realm, page_size, offset, search.as_deref(), false)
             .inspect_err(|error| {
                 error!(
                     %error,
@@ -170,6 +170,55 @@ pub fn list(
         )
     } else {
         out!();
+    }
+
+    Ok(())
+}
+
+macro_rules! print_or {
+    ($any:ident, $printer:ident, $label:literal, $value:ident) => {
+        if let Some(x) = $value {
+            $printer.print_field($label, x);
+            $any = true;
+        }
+    };
+}
+
+pub fn describe(format: OutputFormat, realm: Option<String>, client_id: String) -> Result<()> {
+    let (name, ctx) = enforce_context(format)?;
+    let (working_realm, mut client) = prepare_client(format, realm, name, ctx)?;
+
+    let item = client
+        .client_describe(&working_realm, &client_id)
+        .inspect_err(|error| {
+            error!(
+                %error,
+                %format,
+                realm = working_realm,
+                client_id,
+                "failed to fetch clients"
+            );
+        })?;
+
+    if let Some(client) = item {
+        let mut printer = Printer::builder().format(format).build();
+        let ClientRepresentation { id, client_id, .. } = client;
+        let mut any = false;
+
+        printer.ln();
+
+        print_or!(any, printer, "id", id);
+        print_or!(any, printer, "clientId", client_id);
+
+        if any {
+            printer.ln();
+        }
+    } else {
+        outfmt!(
+            format,
+            "client '{client_id}' not found —  \
+             use \"clients list [search]\" to search existing clients"
+        );
     }
 
     Ok(())

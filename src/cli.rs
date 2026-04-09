@@ -35,9 +35,12 @@ pub enum ContextCommands {
         /// Keycloak server base URL
         #[arg(long = "server-url")]
         server_url: Option<String>,
-        /// Default realm
-        #[arg(short = 'r', long = "realm")]
+        /// Authorization realm
+        #[arg(long = "auth-realm")]
         realm: Option<String>,
+        /// Default working realm
+        #[arg(long = "working-realm")]
+        working_realm: Option<String>,
         /// Username
         #[arg(short = 'u', long = "username")]
         username: Option<String>,
@@ -64,9 +67,12 @@ pub enum ContextCommands {
         /// Keycloak server base URL
         #[arg(long = "server-url")]
         server_url: Option<String>,
-        /// Default realm
-        #[arg(short = 'r', long = "realm")]
+        /// Authorization realm
+        #[arg(long = "auth-realm")]
         realm: Option<String>,
+        /// Default working realm
+        #[arg(long = "working-realm")]
+        working_realm: Option<String>,
         /// Username
         #[arg(short = 'u', long = "username")]
         username: Option<String>,
@@ -129,9 +135,6 @@ pub enum AuthorizeCommands {
     Status {
         /// Name of the context
         context: Option<String>,
-        /// Output format
-        #[arg(long = "format", default_value = "plain")]
-        format: OutputFormat,
     },
 }
 
@@ -156,6 +159,17 @@ pub enum ClientsCommands {
         realm: Option<String>,
         /// Search string
         search: Option<String>,
+    },
+    #[command(name = "describe", alias = "desc", alias = "d")]
+    Describe {
+        /// Output format
+        #[arg(long = "format", default_value = "plain")]
+        format: OutputFormat,
+        /// Working realm
+        #[arg(short = 'r', long = "realm")]
+        realm: Option<String>,
+        /// Search string
+        client_id: String,
     },
 }
 

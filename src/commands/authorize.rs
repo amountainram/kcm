@@ -1,9 +1,8 @@
 use super::{Color, Printer, load_context_or_current, save_config};
 use crate::{
     Error, Result,
-    cli::OutputFormat,
     client::{AccessToken, AdminCliClient, AuthAccessToken},
-    out, outfmt,
+    out,
 };
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use jsonwebtoken::{DecodingKey, Validation, decode_header};
@@ -45,90 +44,48 @@ fn fmt_relative(secs: i64) -> String {
 }
 
 pub fn logout(name: Option<String>) -> Result<()> {
-    let (name, ctx, mut config) = load_context_or_current(name.as_deref()).inspect_err(|err| {
-        if matches!(err, Error::ContextSelection) {
-            out!(
-                "no context name given and no active context —  \
-                 pass a name or set one with \"context use\""
-            );
-        }
-    })?;
+    let (name, ctx, mut config) = load_context_or_current(name.as_deref())?;
 
     ctx.delete_token()?;
     config.contexts.entry(name).insert_entry(ctx);
 
-    println!("logged out!");
+    out!("logged out!");
 
     save_config(&config)
 }
 
 pub fn login(name: Option<String>) -> Result<()> {
-    let (name, ctx, mut config) = load_context_or_current(name.as_deref()).inspect_err(|err| {
-        if matches!(err, Error::ContextSelection) {
-            out!(
-                "no context name given and no active context —  \
-                 pass a name or set one with \"context use\""
-            );
-        }
-    })?;
+    let (name, ctx, mut config) = load_context_or_current(name.as_deref())?;
 
-    let server_url = match &ctx.server_url {
-        Some(s) => s.clone(),
-        None => {
-            println!(
-                "cannot find server-url on current context —  \
-                 use \"context update --server-url <url>\""
-            );
-            return Err(Error::MissingArgument);
-        }
-    };
+    let server_url = ctx
+        .server_url
+        .clone()
+        .ok_or(Error::ContextMissingServerUrl)?;
 
     let mut client = AdminCliClient::builder()
         .name(name)
         .server_url(server_url.clone())
         .context(ctx)
         .build();
-    client
-        .refresh()
-        .inspect_err(|err| {
-            if matches!(err, Error::ContextMissingUsername) {
-                out!(
-                    "cannot find username on current context —  \
-                 use \"context update --username <username>\""
-                );
-            } else if matches!(err, Error::ContextMissingPassword) {
-                out!(
-                    "cannot find password on current context —  \
-                 use \"context update --username <username>\""
-                );
-            }
-        })
-        .or_else(|err| {
-            if matches!(err, Error::AuthNoTokenFound) {
-                client.token()
-            } else {
-                Err(err)
-            }
-        })?;
+
+    client.refresh().or_else(|err| {
+        if matches!(err, Error::AuthNoTokenFound) {
+            client.token()
+        } else {
+            Err(err)
+        }
+    })?;
 
     let (name, ctx) = client.consume();
     config.contexts.entry(name).insert_entry(ctx);
 
-    println!("logged in!");
+    out!("logged in!");
 
     save_config(&config)
 }
 
-pub fn status(name: Option<String>, format: OutputFormat) -> Result<()> {
-    let (name, ctx, _) = load_context_or_current(name.as_deref()).inspect_err(|err| {
-        if matches!(err, Error::ContextSelection) {
-            outfmt!(
-                format,
-                "no context name given and no active context —  \
-                 pass a name or set one with \"context use\""
-            );
-        }
-    })?;
+pub fn status(name: Option<String>) -> Result<()> {
+    let (name, ctx, _) = load_context_or_current(name.as_deref())?;
     let (token, refresh_expires_in) = match ctx.get_token()? {
         Some(AuthAccessToken {
             access_token,
@@ -136,26 +93,14 @@ pub fn status(name: Option<String>, format: OutputFormat) -> Result<()> {
             ..
         }) => (access_token, refresh_expires_in),
         None => {
-            outfmt!(
-                format,
-                "no token found on current context —  \
-                 use \"authorize login\" to obtain one"
-            );
-
-            return Ok(());
+            return Err(Error::MustLogin);
         }
     };
 
     let server_url = match &ctx.server_url {
         Some(s) => s.clone(),
         None => {
-            outfmt!(
-                format,
-                "cannot find server-url on current context —  \
-                 use \"context update --server-url <url>\""
-            );
-
-            return Err(Error::MissingArgument);
+            return Err(Error::ContextMissingServerUrl);
         }
     };
 
@@ -181,13 +126,7 @@ pub fn status(name: Option<String>, format: OutputFormat) -> Result<()> {
             "validation context"
         );
 
-        outfmt!(
-            format,
-            "invalid authorization status —  \
-             use \"authorize login\""
-        );
-
-        return Error::JwtMissingKid;
+        Error::JwtMissingKid
     })?;
 
     let jwk = jwks.find(&kid).ok_or_else(|| {
@@ -198,12 +137,7 @@ pub fn status(name: Option<String>, format: OutputFormat) -> Result<()> {
             "validation context"
         );
 
-        out!(
-            "invalid authorization status —  \
-             use \"authorize login\""
-        );
-
-        return Error::JwksMissingKid;
+        Error::JwksMissingKid
     })?;
 
     let decoding_key = DecodingKey::try_from(jwk).map_err(|error| {
@@ -216,13 +150,7 @@ pub fn status(name: Option<String>, format: OutputFormat) -> Result<()> {
 
         error!(%error, kid, "failed to build decoding key");
 
-        outfmt!(
-            format,
-            "invalid authorization status —  \
-             use \"authorize login\""
-        );
-
-        return error;
+        Error::JwtDecodingKey
     })?;
 
     let mut validation = Validation::new(header.alg);
@@ -244,6 +172,8 @@ pub fn status(name: Option<String>, format: OutputFormat) -> Result<()> {
     let (result, t) = match token_data {
         Ok(t) => (Ok(()), t.claims),
         Err(error) => {
+            error!(%error, "failed to retrieve token data");
+
             let claims = token.split('.').skip(1).take(1).collect::<Vec<_>>();
             let claims = claims.first().ok_or(Error::JwtInvalidClaims)?;
             let claims = BASE64_URL_SAFE_NO_PAD
@@ -260,11 +190,11 @@ pub fn status(name: Option<String>, format: OutputFormat) -> Result<()> {
             let claims = serde_json::from_slice::<AccessToken>(&claims)
                 .inspect_err(|error| error!(%error, "failed to parse claims"))?;
 
-            (Err(error), claims)
+            (Err(Error::MustLogin), claims)
         }
     };
     let now = now_epoch();
-    let mut printer = Printer::builder().format(format).build();
+    let mut printer = Printer::default();
 
     let mut any = false;
     printer.ln();
@@ -350,11 +280,5 @@ pub fn status(name: Option<String>, format: OutputFormat) -> Result<()> {
         printer.ln();
     }
 
-    Ok(result.inspect_err(|_| {
-        outfmt!(
-            format,
-            "invalid authorization status —  \
-             use \"authorize login\""
-        );
-    })?)
+    result
 }

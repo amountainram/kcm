@@ -4,6 +4,8 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Debug)]
 pub enum Error {
+    MustLogin,
+    MissingCredentials,
     AuthNoTokenFound,
     JwtInvalidClaims,
     JwtDecodingKey,
@@ -11,6 +13,7 @@ pub enum Error {
     JwksMissingKid,
     TooManyArguments,
     MissingArgument,
+    ContextMissingServerUrl,
     ContextMissingUsername,
     ContextMissingPassword,
     ContextSelection,
@@ -44,6 +47,8 @@ where
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let msg = match self {
+            Self::MustLogin => "must login",
+            Self::MissingCredentials => "missing credentials",
             Self::AuthNoTokenFound => "no token found",
             Self::JwtInvalidClaims => "token invalid claims",
             Self::JwtDecodingKey => "failed to build decoding key",
@@ -51,6 +56,7 @@ impl fmt::Display for Error {
             Self::JwksMissingKid => "jwks does not contain requested kid",
             Self::TooManyArguments => "too many arguments",
             Self::MissingArgument => "missing argument",
+            Self::ContextMissingServerUrl => "missing server-url",
             Self::ContextMissingUsername => "missing username",
             Self::ContextMissingPassword => "missing password",
             Self::ContextSelection => "failed to select context",

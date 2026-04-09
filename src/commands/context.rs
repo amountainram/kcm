@@ -121,7 +121,6 @@ pub fn r#use(name: Option<String>) -> Result<()> {
     let mut config = load_config()?;
 
     if config.contexts.is_empty() {
-        out!(r#"no contexts configured —  create one with "context create""#);
         return Err(Error::ContextNotFound);
     }
 
@@ -143,40 +142,29 @@ pub fn r#use(name: Option<String>) -> Result<()> {
                     }
                 }
             } else {
-                out!(
-                    "context name required (fzf not \
-                     available for interactive selection)",
-                );
                 return Err(Error::ContextNameRequired);
             }
         }
     };
 
-    if !config.contexts.contains_key(&selected) {
+    if config.contexts.contains_key(&selected) {
+        config.current_context = Some(selected.clone());
+        save_config(&config)?;
+        out!("switched to context '{selected}'");
+
+        Ok(())
+    } else {
         out!(
-            r#"context '{selected}' not found —  \
-              select one with "context use""#
+            "context '{selected}' not found —  \
+             select one with \"context use\""
         );
-        return Err(Error::ContextSelection);
+
+        Err(Error::msg("failed context selection"))
     }
-
-    config.current_context = Some(selected.clone());
-    save_config(&config)?;
-    out!("switched to context '{selected}'");
-
-    Ok(())
 }
 
 pub fn show(format: OutputFormat) -> Result<()> {
-    if let Some((name, current_context)) = current_context().inspect_err(|err| {
-        if matches!(err, Error::ContextNotFound) {
-            outfmt!(
-                format,
-                r#"no current context configured —  \
-                    select one with "context use""#
-            );
-        }
-    })? {
+    if let Some((name, current_context)) = current_context()? {
         match format {
             OutputFormat::Json => {
                 let mut map = serde_json::Map::new();
@@ -202,7 +190,7 @@ pub fn show(format: OutputFormat) -> Result<()> {
             }
         }
     } else {
-        outfmt!(format, "no active context");
+        out!("no active context");
     }
 
     Ok(())
@@ -213,17 +201,13 @@ pub fn create(
     current: bool,
     server_url: Option<String>,
     realm: Option<String>,
+    working_realm: Option<String>,
     username: Option<String>,
     password: Option<String>,
     token: Option<String>,
 ) -> Result<()> {
     let mut config = load_config()?;
     if config.contexts.contains_key(&name) {
-        out!(
-            "context already exists —  \
-             use \"context update\" to modify it"
-        );
-
         return Err(Error::ContextAlreadyExists);
     }
 
@@ -232,7 +216,7 @@ pub fn create(
     let mut ctx = Context {
         server_url,
         realm: realm.unwrap_or_else(default_auth_realm),
-        working_realm: None,
+        working_realm,
         username,
         password: None,
         token: None,
@@ -267,6 +251,7 @@ pub fn update(
     current: bool,
     server_url: Option<String>,
     realm: Option<String>,
+    working_realm: Option<String>,
     username: Option<String>,
     password: Option<String>,
     token: Option<String>,
@@ -275,58 +260,47 @@ pub fn update(
         mut current_context,
         mut contexts,
     } = load_config()?;
-    let name = match name.or(current_context.clone()) {
-        Some(x) => x,
-        None => {
-            out!(
-                "no context name given and no active context —  \
-                 pass a name or set one with \"context use\""
-            );
 
-            return Err(Error::ContextSelection);
-        }
-    };
-    if let Some(entry) = contexts.get_mut(&name) {
-        let password = resolve_password(password)?;
+    let name = name
+        .or(current_context.clone())
+        .ok_or(Error::ContextSelection)?;
 
-        if current {
-            let _ = current_context.insert(name.clone());
-        }
-        if let Some(server_url) = server_url {
-            let _ = entry.server_url.insert(server_url);
-        }
-        if let Some(realm) = realm {
-            entry.realm = realm;
-        }
-        if let Some(username) = username {
-            let _ = entry.username.insert(username);
-        }
-        if let Some(pw) = password {
-            entry.set_password(&name, &pw)?;
-        }
-        if let Some(tok) = token {
-            let tok = &serde_json::from_str(&tok).inspect_err(|error| {
-                error!(name, ?error, "failed to deserialize token from input");
-            })?;
-            entry.set_token(&name, tok)?;
-        }
+    let entry = contexts.get_mut(&name).ok_or(Error::ContextNotFound)?;
+    let password = resolve_password(password)?;
 
-        save_config(&Config {
-            current_context,
-            contexts,
-        })?;
-
-        out!("context updated");
-
-        Ok(())
-    } else {
-        out!(
-            "context '{name}' not found —  \
-             use \"context create\" to add it"
-        );
-
-        Err(Error::ContextNotFound)
+    if current {
+        let _ = current_context.insert(name.clone());
     }
+    if let Some(server_url) = server_url {
+        let _ = entry.server_url.insert(server_url);
+    }
+    if let Some(realm) = realm {
+        entry.realm = realm;
+    }
+    if let Some(working_realm) = working_realm {
+        let _ = entry.working_realm.insert(working_realm);
+    }
+    if let Some(username) = username {
+        let _ = entry.username.insert(username);
+    }
+    if let Some(pw) = password {
+        entry.set_password(&name, &pw)?;
+    }
+    if let Some(tok) = token {
+        let tok = &serde_json::from_str(&tok).inspect_err(|error| {
+            error!(name, ?error, "failed to deserialize token from input");
+        })?;
+        entry.set_token(&name, tok)?;
+    }
+
+    save_config(&Config {
+        current_context,
+        contexts,
+    })?;
+
+    out!("context updated");
+
+    Ok(())
 }
 
 pub fn delete(yes: bool, name: String) -> Result<()> {
@@ -341,16 +315,12 @@ pub fn delete(yes: bool, name: String) -> Result<()> {
     if config.current_context.as_ref() == Some(&name) {
         config.current_context.take();
     }
-    if let Some(ctx) = config.contexts.remove(&name) {
-        ctx.delete_secrets()?;
-    } else {
-        out!(
-            "context '{name}' not found —  \
-             use \"context create\" to add it"
-        );
 
-        return Err(Error::ContextNotFound);
-    }
+    config
+        .contexts
+        .remove(&name)
+        .ok_or(Error::ContextNotFound)?
+        .delete_secrets()?;
 
     save_config(&config)?;
 

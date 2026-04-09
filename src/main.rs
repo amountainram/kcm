@@ -41,19 +41,39 @@ fn context_action(command: ContextCommands) -> Result<()> {
             current,
             server_url,
             realm,
+            working_realm,
             username,
             password,
             token,
-        } => commands::context::create(name, current, server_url, realm, username, password, token),
+        } => commands::context::create(
+            name,
+            current,
+            server_url,
+            realm,
+            working_realm,
+            username,
+            password,
+            token,
+        ),
         ContextCommands::Update {
             name,
             current,
             server_url,
             realm,
+            working_realm,
             username,
             password,
             token,
-        } => commands::context::update(name, current, server_url, realm, username, password, token),
+        } => commands::context::update(
+            name,
+            current,
+            server_url,
+            realm,
+            working_realm,
+            username,
+            password,
+            token,
+        ),
         ContextCommands::Delete { yes, name } => commands::context::delete(yes, name),
         ContextCommands::Use { name } => commands::context::r#use(name),
         ContextCommands::Show { format } => commands::context::show(format),
@@ -63,9 +83,7 @@ fn context_action(command: ContextCommands) -> Result<()> {
 
 fn authorize_action(command: AuthorizeCommands) -> Result<()> {
     match command {
-        AuthorizeCommands::Status { context, format } => {
-            commands::authorize::status(context, format)
-        }
+        AuthorizeCommands::Status { context } => commands::authorize::status(context),
         AuthorizeCommands::Login { context } => commands::authorize::login(context),
         AuthorizeCommands::Logout { context } => commands::authorize::logout(context),
     }
@@ -104,6 +122,15 @@ fn clients_action(command: ClientsCommands, cmd_realm: Option<String>) -> Result
             exclude_realms(Some(format), cmd_realm, realm)?,
             search,
         ),
+        ClientsCommands::Describe {
+            format,
+            realm,
+            client_id,
+        } => commands::clients::describe(
+            format,
+            exclude_realms(Some(format), cmd_realm, realm)?,
+            client_id,
+        ),
     }
 }
 
@@ -121,6 +148,64 @@ fn main() -> ExitCode {
             Commands::Clients { command, realm } => clients_action(command, realm),
         }
         .inspect_err(|error| {
+            match error {
+                Error::ContextAlreadyExists => {
+                    out!(
+                        "context already exists —  \
+                         use \"context update\" to modify it"
+                    );
+                }
+                Error::ContextNameRequired => {
+                    out!(
+                        "context name required (fzf not \
+                         available for interactive selection)",
+                    );
+                }
+                Error::ContextNotFound => {
+                    out!(
+                        "context not found —  \
+                         create one with \"context create\""
+                    );
+                }
+                Error::ContextSelection => {
+                    out!(
+                        "no context name given and no active context —  \
+                         pass a name or set one with \"context use\""
+                    );
+                }
+                Error::ContextMissingUsername => {
+                    out!(
+                        "cannot find username on current context —  \
+                         use \"context update --username <username>\""
+                    );
+                }
+                Error::ContextMissingPassword => {
+                    out!(
+                        "cannot find password on current context —  \
+                         use \"context update --password [password]\""
+                    );
+                }
+                Error::ContextMissingServerUrl => {
+                    out!(
+                        "cannot find server-url on current context —  \
+                         use \"context update --server-url <url>\""
+                    );
+                }
+                Error::MustLogin => {
+                    out!(
+                        "no token found on current context —  \
+                         use \"authorize login\" to obtain one"
+                    );
+                }
+                Error::JwtMissingKid | Error::JwksMissingKid | Error::JwtDecodingKey => {
+                    out!(
+                        "invalid authorization status —  \
+                         use \"authorize login\""
+                    );
+                }
+                _ => {}
+            }
+
             if tracing::enabled!(tracing::Level::DEBUG) {
                 error!(?error, "error on exit");
             }

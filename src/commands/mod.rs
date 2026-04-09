@@ -335,7 +335,7 @@ fn load_context_or_current(name: Option<&str>) -> Result<(String, Context, Confi
 
 const LABEL_WIDTH: usize = 20;
 
-#[derive(TypedBuilder)]
+#[derive(Default, TypedBuilder)]
 struct Printer {
     #[builder(default)]
     format: OutputFormat,

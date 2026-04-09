@@ -196,12 +196,10 @@ impl AdminCliClient {
 
     pub fn refresh(&mut self) -> Result<keycloak::AuthAccessToken> {
         let now = now_epoch();
-        let token = match self.context.get_token()? {
-            None => {
-                return Err(Error::AuthNoTokenFound);
-            }
-            Some(x) => x,
-        };
+        let token = self
+            .context
+            .get_token()?
+            .ok_or_else(|| Error::AuthNoTokenFound)?;
         let AuthAccessToken {
             access_token,
             expires_in,
@@ -261,11 +259,18 @@ impl AdminCliClient {
     }
 
     fn authorize(&mut self) -> Result<HeaderValue> {
+        let token = self.refresh().or_else(|err| {
+            if matches!(err, Error::AuthNoTokenFound) {
+                self.token()
+            } else {
+                Err(err)
+            }
+        })?;
         let AuthAccessToken {
             access_token,
             token_type,
             ..
-        } = self.refresh()?;
+        } = &token;
         let auth = format!(
             "{} {access_token}",
             token_type.as_deref().unwrap_or("Bearer")
@@ -285,6 +290,7 @@ impl AdminCliClient {
         page_size: u64,
         offset: u64,
         search: Option<&str>,
+        exact: bool,
     ) -> Result<Vec<keycloak::ClientRepresentation>> {
         let auth_header = self.authorize()?;
 
@@ -295,7 +301,7 @@ impl AdminCliClient {
         ];
         if let Some(search) = search {
             query.push(("clientId", search.to_string()));
-            query.push(("search", "true".to_string()));
+            query.push(("search", (!exact).to_string()));
         }
         let res = ureq::get(&endpoint)
             .query_pairs(query)
@@ -310,6 +316,14 @@ impl AdminCliClient {
                 "failed to deserialize list of clients"
             );
         })
+    }
+
+    pub fn client_describe(
+        &mut self,
+        realm: &str,
+        client_id: &str,
+    ) -> Result<Option<keycloak::ClientRepresentation>> {
+        Ok(self.clients_list(realm, 1, 0, Some(client_id), true)?.pop())
     }
 }
 
