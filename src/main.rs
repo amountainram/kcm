@@ -123,13 +123,19 @@ fn clients_action(command: ClientsCommands, cmd_realm: Option<String>) -> Result
             search,
         ),
         ClientsCommands::Describe {
+            common,
             format,
+            show_credentials,
             realm,
             client_id,
         } => commands::clients::describe(
             format,
             exclude_realms(Some(format), cmd_realm, realm)?,
             client_id,
+            commands::clients::DescribeOptions::builder()
+                .show_credentials(show_credentials)
+                .jwks(common)
+                .build(),
         ),
     }
 }

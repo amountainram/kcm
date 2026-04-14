@@ -1,5 +1,6 @@
 use crate::{Error, Result, cli::OutputFormat, client::AuthAccessToken, out, outfmt};
 pub use colored::Color;
+use colored::Colorize;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::{
     borrow::Cow,
@@ -341,6 +342,8 @@ struct Printer {
     format: OutputFormat,
     #[builder(default, setter(skip))]
     buffer: serde_json::Map<String, serde_json::Value>,
+    #[builder(default = LABEL_WIDTH)]
+    label_width: usize,
 }
 
 impl Drop for Printer {
@@ -370,21 +373,63 @@ impl Printer {
         }
     }
 
+    pub fn print_info<K, V>(&mut self, label: K, value: V)
+    where
+        K: fmt::Display,
+        V: fmt::Display,
+    {
+        if matches!(self.format, OutputFormat::Plain) {
+            let label = format!("{label}:");
+            out!(
+                "    {} {value}",
+                format!("{label:<width$}", width = self.label_width).dimmed(),
+            );
+        }
+    }
+
     pub fn print_field<K, V>(&mut self, label: K, value: V)
     where
         K: fmt::Display + Into<String>,
-        V: fmt::Display + Clone + Into<serde_json::Value>,
+        V: Clone + Into<serde_json::Value>,
     {
-        use colored::Colorize;
-
-        const LABEL_WIDTH: usize = 20;
-
         match self.format {
             OutputFormat::Plain => {
                 let label = format!("{label}:");
                 out!(
-                    "    {} {value}",
-                    format!("{label:<width$}", width = LABEL_WIDTH).dimmed(),
+                    "    {} {}",
+                    format!("{label:<width$}", width = self.label_width).dimmed(),
+                    match value.into() {
+                        serde_json::Value::Null => "null".to_string(),
+                        serde_json::Value::Bool(x) => x.to_string(),
+                        serde_json::Value::Number(x) => x.to_string(),
+                        serde_json::Value::String(x) => x,
+                        serde_json::Value::Array(values) => {
+                            if values.is_empty() {
+                                "[]".to_string()
+                            } else {
+                                let pad = " ".repeat(self.label_width + 5);
+                                values
+                                    .iter()
+                                    .map(|v| match v {
+                                        serde_json::Value::String(s) => s.clone(),
+                                        other => other.to_string(),
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join(&format!("\n{pad}"))
+                            }
+                        }
+                        // serde_json::to_string(&values).unwrap_or_default(),
+                        serde_json::Value::Object(map) => {
+                            let pad = " ".repeat(self.label_width + 5);
+                            map.iter()
+                                .map(|(k, v)| match v {
+                                    serde_json::Value::String(s) => format!("{k}: {s}"),
+                                    other => format!("{k}: {other}"),
+                                })
+                                .collect::<Vec<_>>()
+                                .join(&format!("\n{pad}"))
+                        }
+                    }
                 );
             }
             OutputFormat::Json => {
@@ -406,7 +451,7 @@ impl Printer {
                 let value = value.to_string().color(color);
                 out!(
                     "    {} {value}",
-                    format!("{label:<width$}", width = LABEL_WIDTH).dimmed(),
+                    format!("{label:<width$}", width = self.label_width).dimmed(),
                 );
             }
             OutputFormat::Json => {

@@ -1,12 +1,15 @@
 use super::{Context, OutputFormat, Printer, enforce_context};
 use crate::{
     Error, Result,
-    client::{AdminCliClient, ClientRepresentation},
+    cli::JwksManagement,
+    client::{AdminCliClient, ClientAttributes, ClientRepresentation},
+    commands::Sensitive,
     out, outfmt,
 };
 use colored::Colorize;
 use std::io::{IsTerminal, stdin};
 use tracing::error;
+use typed_builder::TypedBuilder;
 
 fn coalesce_realm<'a>(ctx: &'a Context, realm: Option<&'a str>) -> Option<&'a str> {
     realm.or(ctx.working_realm.as_deref())
@@ -176,15 +179,32 @@ pub fn list(
 }
 
 macro_rules! print_or {
-    ($any:ident, $printer:ident, $label:literal, $value:ident) => {
+    ($any:ident, $printer:ident, $label:literal, $value:expr) => {
         if let Some(x) = $value {
             $printer.print_field($label, x);
             $any = true;
         }
     };
+    ($any:ident, $printer:ident, $label:literal, $value:expr, $color:expr) => {
+        if let Some(x) = $value {
+            $printer.print_field_with_color($label, x, $color);
+            $any = true;
+        }
+    };
 }
 
-pub fn describe(format: OutputFormat, realm: Option<String>, client_id: String) -> Result<()> {
+#[derive(TypedBuilder)]
+pub struct DescribeOptions {
+    jwks: JwksManagement,
+    show_credentials: bool,
+}
+
+pub fn describe(
+    format: OutputFormat,
+    realm: Option<String>,
+    client_id: String,
+    opts: DescribeOptions,
+) -> Result<()> {
     let (name, ctx) = enforce_context(format)?;
     let (working_realm, mut client) = prepare_client(format, realm, name, ctx)?;
 
@@ -201,14 +221,250 @@ pub fn describe(format: OutputFormat, realm: Option<String>, client_id: String) 
         })?;
 
     if let Some(client) = item {
-        let mut printer = Printer::builder().format(format).build();
-        let ClientRepresentation { id, client_id, .. } = client;
-        let mut any = false;
+        let mut printer = Printer::builder().format(format).label_width(26).build();
+        let ClientRepresentation {
+            id,
+            client_id,
+            admin_url,
+            attributes,
+            base_url,
+            client_authenticator_type,
+            default_client_scopes,
+            default_roles,
+            description,
+            direct_access_grants_enabled,
+            direct_grants_only,
+            enabled,
+            frontchannel_logout,
+            full_scope_allowed,
+            implicit_flow_enabled,
+            name,
+            optional_client_scopes,
+            origin,
+            public_client,
+            redirect_uris,
+            root_url,
+            secret,
+            service_accounts_enabled,
+            standard_flow_enabled,
+            type_,
+            web_origins,
+            ..
+        } = client;
+
+        if opts.jwks.should_write() {
+            let attributes_json_map = attributes
+                .iter()
+                .map(|(k, v)| (k.to_string(), serde_json::Value::String(v.to_string())))
+                .collect::<serde_json::Map<_, _>>();
+            let client_attributes = serde_json::from_value::<ClientAttributes>(
+                serde_json::Value::Object(attributes_json_map),
+            )
+            .inspect_err(|error| error!(%error, "invalid client attributes"))?;
+            if let Some(jwks) = client_attributes.jwks_string {
+                opts.jwks.write_out(
+                    serde_json::to_string_pretty(&jwks)
+                        .inspect_err(|error| error!(%error, "invalid jwks"))?,
+                )?;
+            }
+        }
 
         printer.ln();
 
+        let mut grant_types = vec![];
+        if client.standard_flow_enabled.unwrap_or(false) {
+            grant_types.push("Authorization Code");
+        }
+        if client.service_accounts_enabled.unwrap_or(false) {
+            grant_types.push("Client Credentials");
+        }
+        if client.direct_access_grants_enabled.unwrap_or(false) {
+            grant_types.push("Resource Owner Password");
+        }
+        if client.implicit_flow_enabled.unwrap_or(false) {
+            grant_types.push("Implicit");
+        }
+        if grant_types.is_empty() {
+            printer.print_info("[info] oauth2 grants", "[none]");
+        } else {
+            printer.print_info(
+                "[info] oauth2 grants",
+                format!("[{}]", grant_types.join(", ")).dimmed(),
+            );
+        }
+        let mut token_auth_modes = vec![];
+        if matches!(client_authenticator_type.as_deref(), Some("client-secret")) {
+            token_auth_modes.push("client_secret_basic");
+            token_auth_modes.push("client_secret_post");
+        }
+        if matches!(
+            client_authenticator_type.as_deref(),
+            Some("client-secret-jwt")
+        ) {
+            token_auth_modes.push("client_secret_jwt");
+        }
+        if matches!(client_authenticator_type.as_deref(), Some("client-x509")) {
+            token_auth_modes.push("tls_client_auth");
+        }
+        if matches!(client_authenticator_type.as_deref(), Some("client-jwt")) {
+            token_auth_modes.push("private_key_jwt");
+        }
+        if token_auth_modes.is_empty() {
+            printer.print_info("[info] token auth", "[none]");
+        } else {
+            printer.print_info(
+                "[info] token auth",
+                format!("[{}]", token_auth_modes.join(", ")).dimmed(),
+            );
+        }
+
+        printer.ln();
+        let mut any = false;
+
         print_or!(any, printer, "id", id);
         print_or!(any, printer, "clientId", client_id);
+        print_or!(any, printer, "name", name);
+        print_or!(any, printer, "description", description);
+        print_or!(any, printer, "type", type_);
+        print_or!(any, printer, "fullScopeAllowed", full_scope_allowed);
+        print_or!(
+            any,
+            printer,
+            "enabled",
+            enabled,
+            match enabled {
+                Some(true) => colored::Color::Green,
+                Some(false) | None => colored::Color::Red,
+            }
+        );
+
+        if any {
+            printer.ln();
+        }
+        any = false;
+
+        print_or!(
+            any,
+            printer,
+            "publicClient",
+            public_client,
+            match public_client {
+                Some(true) => colored::Color::Magenta,
+                Some(false) | None => colored::Color::Green,
+            }
+        );
+        print_or!(
+            any,
+            printer,
+            "clientAuthenticatorType",
+            client_authenticator_type
+        );
+        print_or!(any, printer, "standardFlowEnabled", standard_flow_enabled);
+        print_or!(any, printer, "implicitFlowEnabled", implicit_flow_enabled);
+        print_or!(
+            any,
+            printer,
+            "directAccessGrantsEnabled",
+            direct_access_grants_enabled
+        );
+        print_or!(any, printer, "directGrantsOnly", direct_grants_only);
+        print_or!(
+            any,
+            printer,
+            "serviceAccountsEnabled",
+            service_accounts_enabled
+        );
+
+        if any {
+            printer.ln();
+        }
+        any = false;
+
+        let secret = secret.map(|cred| {
+            if !opts.show_credentials {
+                Sensitive::from(cred).to_string()
+            } else {
+                cred.to_string()
+            }
+        });
+        print_or!(
+            any,
+            printer,
+            "secret",
+            secret.as_ref().map(|s| s.to_string())
+        );
+        print_or!(
+            any,
+            printer,
+            "attributes",
+            (!attributes.is_empty()).then_some(
+                attributes
+                    .into_iter()
+                    .map(|(k, v)| (k, serde_json::Value::String(v)))
+                    .collect::<serde_json::Map<_, _>>()
+            )
+        );
+        print_or!(
+            any,
+            printer,
+            "defaultClientScopes",
+            default_client_scopes
+                .into_iter()
+                .map(serde_json::Value::String)
+                .collect::<Vec<_>>()
+                .into()
+        );
+        print_or!(
+            any,
+            printer,
+            "optionalClientScopes",
+            optional_client_scopes
+                .into_iter()
+                .map(serde_json::Value::String)
+                .collect::<Vec<_>>()
+                .into()
+        );
+        print_or!(
+            any,
+            printer,
+            "defaultRoles",
+            default_roles
+                .into_iter()
+                .map(serde_json::Value::String)
+                .collect::<Vec<_>>()
+                .into()
+        );
+
+        if any {
+            printer.ln();
+        }
+        any = false;
+
+        print_or!(any, printer, "adminUrl", admin_url);
+        print_or!(any, printer, "rootUrl", root_url);
+        print_or!(any, printer, "baseUrl", base_url);
+        print_or!(
+            any,
+            printer,
+            "redirectUris",
+            redirect_uris
+                .into_iter()
+                .map(serde_json::Value::String)
+                .collect::<Vec<_>>()
+                .into()
+        );
+        print_or!(any, printer, "frontchannelLogout", frontchannel_logout);
+        print_or!(any, printer, "origin", origin);
+        print_or!(
+            any,
+            printer,
+            "webOrigins",
+            web_origins
+                .into_iter()
+                .map(serde_json::Value::String)
+                .collect::<Vec<_>>()
+                .into()
+        );
 
         if any {
             printer.ln();

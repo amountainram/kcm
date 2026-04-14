@@ -1,5 +1,5 @@
 use crate::{Error, Result, commands::Context};
-pub use keycloak::{AccessToken, AuthAccessToken, ClientRepresentation};
+pub use keycloak::{AccessToken, AuthAccessToken, ClientAttributes, ClientRepresentation};
 use serde::Deserialize;
 use std::fmt;
 use tracing::{debug, error};
@@ -10,6 +10,8 @@ use ureq::{
 };
 
 mod keycloak {
+    use jsonwebtoken::jwk::JwkSet;
+
     include!(concat!(env!("OUT_DIR"), "/keycloak.rs"));
 
     include!(concat!(env!("OUT_DIR"), "/keycloak_paths.rs"));
@@ -40,6 +42,290 @@ mod keycloak {
         pub session_state: Option<String>,
         #[serde(rename = "scope")]
         pub scope: Option<String>,
+    }
+
+    fn deserialize_bool_string<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = <Option<String> as serde::Deserialize>::deserialize(deserializer)?;
+        Ok(s.and_then(|v| v.parse().ok()))
+    }
+
+    fn deserialize_i64_string<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = <Option<String> as serde::Deserialize>::deserialize(deserializer)?;
+        Ok(s.and_then(|v| v.parse().ok()))
+    }
+
+    fn deserialize_jwks_string<'de, D>(deserializer: D) -> Result<Option<JwkSet>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = <Option<String> as serde::Deserialize>::deserialize(deserializer)?;
+        Ok(s.map(|s| serde_json::from_str(&s))
+            .transpose()
+            .map_err(<D::Error as serde::de::Error>::custom)?)
+    }
+
+    /// Strongly-typed view of `ClientRepresentation.attributes`.
+    ///
+    /// Keys sourced from Keycloak's `OIDCConfigAttributes`, `OAuth2IdentityProviderConfig`,
+    /// and `OIDCIdentityProviderConfig`.
+    #[allow(unused)]
+    #[derive(Debug, Clone, Default, serde::Deserialize)]
+    pub struct ClientAttributes {
+        // ── OIDCConfigAttributes ──────────────────────────────────────────
+
+        // Signature / encryption algorithms
+        #[serde(rename = "user.info.response.signature.alg")]
+        pub user_info_response_signature_alg: Option<String>,
+        #[serde(rename = "user.info.encrypted.response.alg")]
+        pub user_info_encrypted_response_alg: Option<String>,
+        #[serde(rename = "user.info.encrypted.response.enc")]
+        pub user_info_encrypted_response_enc: Option<String>,
+
+        #[serde(rename = "request.object.signature.alg")]
+        pub request_object_signature_alg: Option<String>,
+        #[serde(rename = "request.object.encryption.alg")]
+        pub request_object_encryption_alg: Option<String>,
+        #[serde(rename = "request.object.encryption.enc")]
+        pub request_object_encryption_enc: Option<String>,
+        /// "request or request_uri" | "request only" | "request_uri only"
+        #[serde(rename = "request.object.required")]
+        pub request_object_required: Option<String>,
+
+        #[serde(rename = "request.uris")]
+        pub request_uris: Option<String>,
+
+        #[serde(rename = "id.token.signed.response.alg")]
+        pub id_token_signed_response_alg: Option<String>,
+        #[serde(rename = "id.token.encrypted.response.alg")]
+        pub id_token_encrypted_response_alg: Option<String>,
+        #[serde(rename = "id.token.encrypted.response.enc")]
+        pub id_token_encrypted_response_enc: Option<String>,
+
+        #[serde(rename = "access.token.signed.response.alg")]
+        pub access_token_signed_response_alg: Option<String>,
+
+        #[serde(rename = "authorization.signed.response.alg")]
+        pub authorization_signed_response_alg: Option<String>,
+        #[serde(rename = "authorization.encrypted.response.alg")]
+        pub authorization_encrypted_response_alg: Option<String>,
+        #[serde(rename = "authorization.encrypted.response.enc")]
+        pub authorization_encrypted_response_enc: Option<String>,
+
+        #[serde(rename = "token.endpoint.auth.signing.alg")]
+        pub token_endpoint_auth_signing_alg: Option<String>,
+        #[serde(rename = "token.endpoint.auth.signing.max.exp")]
+        pub token_endpoint_auth_signing_max_exp: Option<String>,
+
+        // JWKS
+        #[serde(rename = "jwks.url")]
+        pub jwks_url: Option<String>,
+        #[serde(
+            rename = "use.jwks.url",
+            deserialize_with = "deserialize_bool_string",
+            default
+        )]
+        pub use_jwks_url: Option<bool>,
+        #[serde(
+            rename = "jwks.string",
+            deserialize_with = "deserialize_jwks_string",
+            default
+        )]
+        pub jwks_string: Option<JwkSet>,
+        #[serde(
+            rename = "use.jwks.string",
+            deserialize_with = "deserialize_bool_string",
+            default
+        )]
+        pub use_jwks_string: Option<bool>,
+
+        // Session / token lifespans
+        #[serde(
+            rename = "access.token.lifespan",
+            deserialize_with = "deserialize_i64_string",
+            default
+        )]
+        pub access_token_lifespan: Option<i64>,
+        #[serde(
+            rename = "client.session.idle.timeout",
+            deserialize_with = "deserialize_i64_string",
+            default
+        )]
+        pub client_session_idle_timeout: Option<i64>,
+        #[serde(
+            rename = "client.session.max.lifespan",
+            deserialize_with = "deserialize_i64_string",
+            default
+        )]
+        pub client_session_max_lifespan: Option<i64>,
+        #[serde(
+            rename = "client.offline.session.idle.timeout",
+            deserialize_with = "deserialize_i64_string",
+            default
+        )]
+        pub client_offline_session_idle_timeout: Option<i64>,
+        #[serde(
+            rename = "client.offline.session.max.lifespan",
+            deserialize_with = "deserialize_i64_string",
+            default
+        )]
+        pub client_offline_session_max_lifespan: Option<i64>,
+
+        // Auth response
+        #[serde(
+            rename = "exclude.session.state.from.auth.response",
+            deserialize_with = "deserialize_bool_string",
+            default
+        )]
+        pub exclude_session_state_from_auth_response: Option<bool>,
+        #[serde(
+            rename = "exclude.issuer.from.auth.response",
+            deserialize_with = "deserialize_bool_string",
+            default
+        )]
+        pub exclude_issuer_from_auth_response: Option<bool>,
+
+        // mTLS / DPoP
+        #[serde(
+            rename = "tls.client.certificate.bound.access.tokens",
+            deserialize_with = "deserialize_bool_string",
+            default
+        )]
+        pub use_mtls_hok_token: Option<bool>,
+        #[serde(
+            rename = "dpop.bound.access.tokens",
+            deserialize_with = "deserialize_bool_string",
+            default
+        )]
+        pub dpop_bound_access_tokens: Option<bool>,
+
+        // PKCE
+        #[serde(rename = "pkce.code.challenge.method")]
+        pub pkce_code_challenge_method: Option<String>,
+
+        // Logout
+        #[serde(rename = "backchannel.logout.url")]
+        pub backchannel_logout_url: Option<String>,
+        #[serde(
+            rename = "backchannel.logout.session.required",
+            deserialize_with = "deserialize_bool_string",
+            default
+        )]
+        pub backchannel_logout_session_required: Option<bool>,
+        #[serde(
+            rename = "backchannel.logout.revoke.offline.tokens",
+            deserialize_with = "deserialize_bool_string",
+            default
+        )]
+        pub backchannel_logout_revoke_offline_tokens: Option<bool>,
+        #[serde(rename = "frontchannel.logout.url")]
+        pub frontchannel_logout_url: Option<String>,
+        #[serde(
+            rename = "frontchannel.logout.session.required",
+            deserialize_with = "deserialize_bool_string",
+            default
+        )]
+        pub frontchannel_logout_session_required: Option<bool>,
+        #[serde(
+            rename = "logout.confirmation.enabled",
+            deserialize_with = "deserialize_bool_string",
+            default
+        )]
+        pub logout_confirmation_enabled: Option<bool>,
+        #[serde(rename = "post.logout.redirect.uris")]
+        pub post_logout_redirect_uris: Option<String>,
+
+        // Refresh tokens
+        #[serde(
+            rename = "client_credentials.use_refresh_token",
+            deserialize_with = "deserialize_bool_string",
+            default
+        )]
+        pub use_refresh_token_for_client_credentials_grant: Option<bool>,
+        #[serde(
+            rename = "use.refresh.tokens",
+            deserialize_with = "deserialize_bool_string",
+            default
+        )]
+        pub use_refresh_tokens: Option<bool>,
+
+        // Token response format
+        #[serde(
+            rename = "token.response.type.bearer.lower-case",
+            deserialize_with = "deserialize_bool_string",
+            default
+        )]
+        pub use_lower_case_in_token_response: Option<bool>,
+        #[serde(
+            rename = "access.token.header.type.rfc9068",
+            deserialize_with = "deserialize_bool_string",
+            default
+        )]
+        pub use_rfc9068_access_token_header_type: Option<bool>,
+        #[serde(
+            rename = "id.token.as.detached.signature",
+            deserialize_with = "deserialize_bool_string",
+            default
+        )]
+        pub id_token_as_detached_signature: Option<bool>,
+
+        // Token exchange
+        #[serde(
+            rename = "standard.token.exchange.enabled",
+            deserialize_with = "deserialize_bool_string",
+            default
+        )]
+        pub standard_token_exchange_enabled: Option<bool>,
+        #[serde(
+            rename = "standard.token.exchange.enableRefreshRequestedTokenType",
+            deserialize_with = "deserialize_bool_string",
+            default
+        )]
+        pub standard_token_exchange_refresh_enabled: Option<bool>,
+
+        // JWT Authorization Grant
+        #[serde(
+            rename = "oauth2.jwt.authorization.grant.enabled",
+            deserialize_with = "deserialize_bool_string",
+            default
+        )]
+        pub jwt_authorization_grant_enabled: Option<bool>,
+        #[serde(rename = "oauth2.jwt.authorization.grant.idp")]
+        pub jwt_authorization_grant_idp: Option<String>,
+        #[serde(rename = "oauth2.jwt.authorization.grant.audience")]
+        pub jwt_authorization_grant_audience: Option<String>,
+
+        // External token
+        #[serde(
+            rename = "external.token.enabled",
+            deserialize_with = "deserialize_bool_string",
+            default
+        )]
+        pub external_token_enabled: Option<bool>,
+        #[serde(rename = "external.token.idp")]
+        pub external_token_idp: Option<String>,
+
+        // Client metadata URIs
+        #[serde(rename = "logoUri")]
+        pub logo_uri: Option<String>,
+        #[serde(rename = "tosUri")]
+        pub tos_uri: Option<String>,
+        #[serde(rename = "policyUri")]
+        pub policy_uri: Option<String>,
+        #[serde(rename = "sectorIdentifierUri")]
+        pub sector_identifier_uri: Option<String>,
+
+        #[serde(
+            rename = "realm_client",
+            deserialize_with = "deserialize_bool_string",
+            default
+        )]
+        pub realm_client: Option<bool>,
     }
 }
 

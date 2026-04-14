@@ -23,6 +23,7 @@ pub enum Error {
     ContextNameRequired,
     InvalidConfigDir,
     NoStdin,
+    FileExists,
     Any(anyhow::Error),
 }
 
@@ -47,6 +48,7 @@ where
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let msg = match self {
+            Self::FileExists => "file exists",
             Self::MustLogin => "must login",
             Self::MissingCredentials => "missing credentials",
             Self::AuthNoTokenFound => "no token found",

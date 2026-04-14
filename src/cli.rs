@@ -1,6 +1,12 @@
+use crate::{Error, Result, out};
 pub use clap::Parser;
 use clap::{Subcommand, ValueEnum};
-use std::fmt;
+use std::{
+    borrow::Cow,
+    fmt, fs,
+    path::{Path, PathBuf},
+};
+use tracing::error;
 
 #[derive(Clone, Copy, Default, ValueEnum)]
 pub enum OutputFormat {
@@ -19,6 +25,79 @@ impl fmt::Display for OutputFormat {
                 Self::Json => "json",
             }
         )
+    }
+}
+
+#[derive(Parser)]
+pub struct JwksManagement {
+    /// Dump Jwks keys (if any) content in the given path.
+    /// A new file will be created if exists
+    #[arg(long = "jwks-out")]
+    jwks_out: Option<PathBuf>,
+    /// Overwrites the jwks out file if exists
+    #[arg(long = "jwks-out-overwrite", default_value = "false")]
+    jwks_out_overwrite: bool,
+}
+
+fn print_path(path: &Path) -> Cow<'_, str> {
+    String::from_utf8_lossy(path.as_os_str().as_encoded_bytes())
+}
+
+impl JwksManagement {
+    pub fn should_write(&self) -> bool {
+        self.jwks_out.is_some()
+    }
+
+    pub fn write_out<T>(&self, content: T) -> Result<()>
+    where
+        T: AsRef<[u8]>,
+    {
+        let path = match &self.jwks_out {
+            Some(path) => path,
+            None => {
+                return Ok(());
+            }
+        };
+
+        let is_path = fs::exists(path)
+            .inspect_err(|error| {
+                error!(
+                    %error,
+                    path = %print_path(path),
+                    "failed to stat file system path"
+                )
+            })
+            .map_err(Error::from)?;
+        let dir = path.parent().ok_or(Error::InvalidParentPath)?;
+
+        if !is_path {
+            fs::create_dir_all(dir).inspect_err(
+                |error| error!(path = %print_path(dir), %error, "failed to create file directory"),
+            )?;
+            fs::write(&path, content).inspect_err(|error| {
+                error!(
+                    path = %print_path(&path),
+                    %error,
+                    "failed to write to file",
+                )
+            })?;
+        } else if self.jwks_out_overwrite {
+            fs::write(&path, content).inspect_err(|error| {
+                error!(
+                    path = %print_path(&path),
+                    %error,
+                    "failed to write to file",
+                )
+            })?;
+        } else {
+            out!(
+                "file referenced by --jwks-out already exists —  \
+                 use \"--jwks-out-ovewrite\" to overwrite"
+            );
+            return Err(Error::FileExists);
+        }
+
+        Ok(())
     }
 }
 
@@ -104,7 +183,7 @@ pub enum ContextCommands {
         name: String,
     },
     /// List all contexts
-    #[command(name = "list")]
+    #[command(name = "list", alias = "ls", alias = "ps")]
     List {
         /// Output format
         #[arg(long = "format", default_value = "plain")]
@@ -162,9 +241,14 @@ pub enum ClientsCommands {
     },
     #[command(name = "describe", alias = "desc", alias = "d")]
     Describe {
+        #[command(flatten)]
+        common: JwksManagement,
         /// Output format
         #[arg(long = "format", default_value = "plain")]
         format: OutputFormat,
+        /// Show client secret in plaintext
+        #[arg(long = "show-credentials", default_value = "false")]
+        show_credentials: bool,
         /// Working realm
         #[arg(short = 'r', long = "realm")]
         realm: Option<String>,
