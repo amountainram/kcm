@@ -6,7 +6,7 @@ use std::{
     borrow::Cow,
     collections::BTreeMap,
     env, fmt, fs,
-    io::{self, Write, stdout},
+    io::{self, Write, stderr, stdin, stdout},
     path::{Path, PathBuf},
 };
 use tracing::error;
@@ -30,6 +30,12 @@ impl<T> Sensitive<T> {
 impl<T> From<T> for Sensitive<T> {
     fn from(value: T) -> Self {
         Self(value)
+    }
+}
+
+impl<T> fmt::Debug for Sensitive<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Sensitive([REDACTED])")
     }
 }
 
@@ -62,6 +68,15 @@ pub struct Context {
         skip_serializing_if = "Option::is_none"
     )]
     pub server_url: Option<String>,
+    #[serde(
+        rename = "admin-server-url",
+        alias = "admin-server_url",
+        alias = "adminServerUrl",
+        default,
+        deserialize_with = "deserialize_server_url",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub admin_server_url: Option<String>,
     #[serde(rename = "realm", default = "default_auth_realm")]
     pub realm: String,
     #[serde(rename = "working-realm", skip_serializing_if = "Option::is_none")]
@@ -120,13 +135,13 @@ impl Context {
     }
 
     pub fn set_token(&mut self, name: &str, at: &AuthAccessToken) -> Result<()> {
-        let value = &serde_json::to_vec(&at)
+        let value = serde_json::to_string(&at)
             .inspect_err(|error| error!(%error, name, "failed to serialize token"))?;
         let entry = Self::keyring_entry(name, "token").inspect_err(
             |error| error!(%error, name, "failed to reserve token entry in OS keyring"),
         )?;
         entry
-            .set_secret(&value)
+            .set_password(&value)
             .inspect_err(|error| error!(%error, name, "failed to store token in OS keyring"))?;
         self.token = Some(Sensitive::from(format!("{name}/token")));
 
@@ -332,6 +347,16 @@ fn load_context_or_current(name: Option<&str>) -> Result<(String, Context, Confi
                 .ok_or_else(|| Error::ContextSelection)
         }
     }
+}
+
+fn confirm(message: &str) -> Result<bool> {
+    eprint!("{message} [y/N] ");
+    stderr().flush()?;
+    let mut answer = String::new();
+    stdin().read_line(&mut answer).inspect_err(|error| {
+        error!(%error, "failed to read confirmation prompt");
+    })?;
+    Ok(answer.trim().eq_ignore_ascii_case("y"))
 }
 
 const LABEL_WIDTH: usize = 20;

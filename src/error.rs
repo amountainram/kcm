@@ -4,6 +4,12 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Debug)]
 pub enum Error {
+    // resources
+    Conflict,
+    NotFound,
+
+    // cli
+    InvalidPublicKey,
     MustLogin,
     MissingCredentials,
     AuthNoTokenFound,
@@ -48,6 +54,9 @@ where
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let msg = match self {
+            Self::Conflict => "conflict",
+            Self::NotFound => "not found",
+            Self::InvalidPublicKey => "invalid public key",
             Self::FileExists => "file exists",
             Self::MustLogin => "must login",
             Self::MissingCredentials => "missing credentials",

@@ -1,4 +1,4 @@
-use super::{Config, Context, current_context, load_config, save_config};
+use super::{Config, Context, confirm, current_context, load_config, save_config};
 use crate::{Error, Result, cli::OutputFormat, commands::default_auth_realm, out, outfmt};
 use std::{
     io::{IsTerminal, Write, stderr, stdin},
@@ -23,6 +23,9 @@ fn print_context(name: &str, ctx: &Context, active: bool) {
 
     if let Some(server) = &ctx.server_url {
         out!("    {} {server}", "server-url:".dimmed());
+    }
+    if let Some(server) = &ctx.admin_server_url {
+        out!("    {} {server}", "admin-server-url:".dimmed());
     }
     out!("    {} {}", "realm:".dimmed(), ctx.realm);
     if let Some(realm) = &ctx.working_realm {
@@ -59,16 +62,6 @@ fn resolve_password(password: Option<String>) -> Result<Option<String>> {
         Some(p) if p.is_empty() => prompt_password("Password: ").map(Some),
         Some(p) => Ok(Some(p)),
     }
-}
-
-fn confirm(message: &str) -> Result<bool> {
-    eprint!("{message} [y/N] ");
-    stderr().flush()?;
-    let mut answer = String::new();
-    stdin().read_line(&mut answer).inspect_err(|error| {
-        error!(%error, "failed to read confirmation prompt");
-    })?;
-    Ok(answer.trim().eq_ignore_ascii_case("y"))
 }
 
 fn has_fzf() -> bool {
@@ -200,6 +193,7 @@ pub fn create(
     name: String,
     current: bool,
     server_url: Option<String>,
+    admin_server_url: Option<String>,
     realm: Option<String>,
     working_realm: Option<String>,
     username: Option<String>,
@@ -214,6 +208,7 @@ pub fn create(
     let password = resolve_password(password)?;
 
     let mut ctx = Context {
+        admin_server_url: admin_server_url.or(server_url.clone()),
         server_url,
         realm: realm.unwrap_or_else(default_auth_realm),
         working_realm,
@@ -250,6 +245,7 @@ pub fn update(
     name: Option<String>,
     current: bool,
     server_url: Option<String>,
+    admin_server_url: Option<String>,
     realm: Option<String>,
     working_realm: Option<String>,
     username: Option<String>,
@@ -271,8 +267,14 @@ pub fn update(
     if current {
         let _ = current_context.insert(name.clone());
     }
+    if let Some(admin_server_url) = admin_server_url {
+        let _ = entry.admin_server_url.insert(admin_server_url);
+    }
     if let Some(server_url) = server_url {
-        let _ = entry.server_url.insert(server_url);
+        let _ = entry.server_url.insert(server_url.clone());
+        if entry.admin_server_url.is_none() {
+            let _ = entry.admin_server_url.insert(server_url);
+        }
     }
     if let Some(realm) = realm {
         entry.realm = realm;
