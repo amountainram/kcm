@@ -1,14 +1,19 @@
-use super::{Context, OutputFormat, Printer, enforce_context};
+use super::{Context, OutputFormat, Printer, Sensitive, confirm, enforce_context};
 use crate::{
     Error, Result,
-    cli::JwksManagement,
-    client::{AdminCliClient, ClientAttributes, ClientRepresentation},
-    commands::Sensitive,
+    cli::{
+        ClientSecret, ClientSecretManagement, JsonManagement, JwksManagement, KeyMaterial,
+        KeyPairManagement, TokenAuthMethod, WriteOutChecks,
+    },
+    client::{AdminCliClient, ClientAttributes, ClientRepresentation, settings},
     out, outfmt,
 };
 use colored::Colorize;
-use std::io::{IsTerminal, stdin};
-use tracing::error;
+use std::{
+    io::{IsTerminal, stdin},
+    mem,
+};
+use tracing::{Level, debug, enabled, error, warn};
 use typed_builder::TypedBuilder;
 
 fn coalesce_realm<'a>(ctx: &'a Context, realm: Option<&'a str>) -> Option<&'a str> {
@@ -52,6 +57,7 @@ fn prepare_client(
         AdminCliClient::builder()
             .name(name)
             .server_url(server_url)
+            .admin_server_url(ctx.admin_server_url.clone())
             .context(ctx)
             .build(),
     ))
@@ -193,10 +199,14 @@ macro_rules! print_or {
     };
 }
 
-#[derive(TypedBuilder)]
+#[derive(TypedBuilder, Default)]
 pub struct DescribeOptions {
+    #[builder(default)]
     jwks: JwksManagement,
+    #[builder(default)]
     show_credentials: bool,
+    #[builder(default)]
+    all: bool,
 }
 
 pub fn describe(
@@ -293,20 +303,29 @@ pub fn describe(
             );
         }
         let mut token_auth_modes = vec![];
-        if matches!(client_authenticator_type.as_deref(), Some("client-secret")) {
+        if matches!(
+            client_authenticator_type.as_deref(),
+            Some(settings::CLIENT_AUTHENTICATOR_TYPE_SECRET)
+        ) {
             token_auth_modes.push("client_secret_basic");
             token_auth_modes.push("client_secret_post");
         }
         if matches!(
             client_authenticator_type.as_deref(),
-            Some("client-secret-jwt")
+            Some(settings::CLIENT_AUTHENTICATOR_TYPE_SECRET_JWT)
         ) {
             token_auth_modes.push("client_secret_jwt");
         }
-        if matches!(client_authenticator_type.as_deref(), Some("client-x509")) {
+        if matches!(
+            client_authenticator_type.as_deref(),
+            Some(settings::CLIENT_AUTHENTICATOR_TYPE_X509)
+        ) {
             token_auth_modes.push("tls_client_auth");
         }
-        if matches!(client_authenticator_type.as_deref(), Some("client-jwt")) {
+        if matches!(
+            client_authenticator_type.as_deref(),
+            Some(settings::CLIENT_AUTHENTICATOR_TYPE_JWT)
+        ) {
             token_auth_modes.push("private_key_jwt");
         }
         if token_auth_modes.is_empty() {
@@ -357,7 +376,7 @@ pub fn describe(
             any,
             printer,
             "clientAuthenticatorType",
-            client_authenticator_type
+            client_authenticator_type.clone()
         );
         print_or!(any, printer, "standardFlowEnabled", standard_flow_enabled);
         print_or!(any, printer, "implicitFlowEnabled", implicit_flow_enabled);
@@ -380,19 +399,32 @@ pub fn describe(
         }
         any = false;
 
-        let secret = secret.map(|cred| {
-            if !opts.show_credentials {
-                Sensitive::from(cred).to_string()
-            } else {
-                cred.to_string()
+        if matches!(
+            client_authenticator_type.as_deref(),
+            Some(settings::CLIENT_AUTHENTICATOR_TYPE_SECRET)
+        ) {
+            let secret = secret.map(|cred| {
+                if !opts.show_credentials {
+                    Sensitive::from(cred).to_string()
+                } else {
+                    cred.to_string()
+                }
+            });
+            print_or!(
+                any,
+                printer,
+                "secret",
+                secret.as_ref().map(|s| s.to_string())
+            );
+        }
+
+        if !opts.all {
+            if any {
+                printer.ln();
             }
-        });
-        print_or!(
-            any,
-            printer,
-            "secret",
-            secret.as_ref().map(|s| s.to_string())
-        );
+            return Ok(());
+        }
+
         print_or!(
             any,
             printer,
@@ -476,6 +508,268 @@ pub fn describe(
              use \"clients list [search]\" to search existing clients"
         );
     }
+
+    Ok(())
+}
+
+#[derive(TypedBuilder, Default)]
+pub struct CreateOptions {
+    #[builder(setter(into))]
+    client_id: Option<String>,
+    #[builder(setter(into))]
+    description: Option<String>,
+    access_token_lifespan: Option<i64>,
+    secret_management: ClientSecretManagement,
+    key_pair_management: KeyPairManagement,
+    token_auth_method: Option<TokenAuthMethod>,
+    use_refresh_token: Option<bool>,
+    json_management: JsonManagement,
+}
+
+enum Credentials {
+    PrivateKeyJWT(KeyMaterial),
+    ClientSecretJWT(ClientSecret),
+    ClientSecretPost(ClientSecret),
+    ClientSecretBasic(ClientSecret),
+}
+
+pub fn create(format: OutputFormat, realm: Option<String>, opts: CreateOptions) -> Result<()> {
+    let json = opts.json_management.into_json()?;
+    let extra = json
+        .used()
+        .then(|| {
+            json.from_value::<ClientRepresentation>().inspect_err(
+                |error| error!(%error, "failed to deserialize json as client representation"),
+            )
+        })
+        .transpose()?;
+
+    // <= credentials out here
+    let credentials = match opts.token_auth_method {
+        Some(TokenAuthMethod::PrivateKeyJWT) => {
+            let unused = opts.secret_management.used();
+            if !unused.is_empty() {
+                warn!(
+                    "unused parameter{} {}",
+                    (unused.len() == 1).then_some("s").unwrap_or_default(),
+                    unused.join(", ")
+                );
+            }
+
+            let key_material = opts.key_pair_management.to_pair()?;
+            if key_material.should_write() {
+                key_material.can_write()?;
+            }
+            Some(Credentials::PrivateKeyJWT(key_material))
+        }
+        Some(TokenAuthMethod::ClientSecretJWT) => {
+            let secret = opts.secret_management.to_secret()?;
+            if secret.should_write() {
+                secret.can_write()?;
+            }
+            Some(Credentials::ClientSecretJWT(secret))
+        }
+        Some(TokenAuthMethod::TlsClientAuth) => {
+            unimplemented!()
+        }
+        Some(TokenAuthMethod::ClientSecretPost) => {
+            let secret = opts.secret_management.to_secret()?;
+            let unused = opts.key_pair_management.used();
+            if !unused.is_empty() {
+                warn!(
+                    "unused parameter{} {}",
+                    (unused.len() == 1).then_some("s").unwrap_or_default(),
+                    unused.join(", ")
+                );
+            }
+            if secret.should_write() {
+                secret.can_write()?;
+            }
+            Some(Credentials::ClientSecretPost(secret))
+        }
+        Some(TokenAuthMethod::ClientSecretBasic) => {
+            let secret = opts.secret_management.to_secret()?;
+            let unused = opts.key_pair_management.used();
+            if !unused.is_empty() {
+                warn!(
+                    "unused parameter{} {}",
+                    (unused.len() == 1).then_some("s").unwrap_or_default(),
+                    unused.join(", ")
+                );
+            }
+            if secret.should_write() {
+                secret.can_write()?;
+            }
+            Some(Credentials::ClientSecretBasic(secret))
+        }
+        None => {
+            if !opts.secret_management.used().is_empty() {
+                Some(Credentials::ClientSecretPost(
+                    opts.secret_management.to_secret()?,
+                ))
+            } else if !opts.key_pair_management.used().is_empty() {
+                Some(Credentials::PrivateKeyJWT(
+                    opts.key_pair_management.to_pair()?,
+                ))
+            } else {
+                None
+            }
+        }
+    };
+
+    let mut client_attributes = ClientAttributes {
+        pkce_code_challenge_method: Some(settings::PKCE_CODE_CHALLENGE_METHOD_S256.into()),
+        backchannel_logout_session_required: Some(true),
+        frontchannel_logout_session_required: Some(true),
+        use_refresh_tokens: opts.use_refresh_token.unwrap_or(false).into(),
+        use_refresh_token_for_client_credentials_grant: Some(false),
+        access_token_lifespan: opts.access_token_lifespan,
+        ..Default::default()
+    };
+    let mut client_repr = ClientRepresentation {
+        client_id: opts
+            .client_id
+            .or_else(|| Some(uuid::Uuid::now_v7().to_string())),
+        description: opts.description,
+        implicit_flow_enabled: Some(false),
+        direct_access_grants_enabled: Some(false),
+        direct_grants_only: Some(false),
+        enabled: Some(true),
+        full_scope_allowed: Some(false),
+        default_client_scopes: vec![],
+        optional_client_scopes: vec![],
+        ..Default::default()
+    };
+
+    const DEFAULT_TOKEN_ENDPOINT_AUTH_SIGNING_MAX_EXP: i64 = 300;
+    if let Some(method) = &credentials {
+        match method {
+            Credentials::ClientSecretBasic(_) | Credentials::ClientSecretPost(_) => {
+                let _ = client_repr.client_authenticator_type =
+                    Some(settings::CLIENT_AUTHENTICATOR_TYPE_SECRET.into());
+            }
+            Credentials::ClientSecretJWT(_) => {
+                let _ = client_repr.client_authenticator_type =
+                    Some(settings::CLIENT_AUTHENTICATOR_TYPE_SECRET_JWT.into());
+                let _ = client_attributes.token_endpoint_auth_signing_max_exp =
+                    Some(DEFAULT_TOKEN_ENDPOINT_AUTH_SIGNING_MAX_EXP.to_string());
+            }
+            Credentials::PrivateKeyJWT(_) => {
+                let _ = client_repr.client_authenticator_type =
+                    Some(settings::CLIENT_AUTHENTICATOR_TYPE_JWT.into());
+                let _ = client_attributes.token_endpoint_auth_signing_max_exp =
+                    Some(DEFAULT_TOKEN_ENDPOINT_AUTH_SIGNING_MAX_EXP.to_string());
+            } // TokenAuthMethod::TlsClientAuth => {
+              //     let _ = client_repr.client_authenticator_type =
+              //         Some(settings::CLIENT_AUTHENTICATOR_TYPE_X509.into());
+              // }
+        }
+    } else {
+        let _ = client_repr.public_client.insert(true);
+    }
+
+    if let Some(creds) = &credentials {
+        match creds {
+            Credentials::ClientSecretBasic(ClientSecret { secret, .. })
+            | Credentials::ClientSecretPost(ClientSecret { secret, .. })
+            | Credentials::ClientSecretJWT(ClientSecret { secret, .. }) => {
+                let _ = client_attributes.use_jwks_string.insert(false);
+                let _ = client_attributes.use_jwks_url.insert(false);
+                let _ = client_repr.secret.insert(secret.read().to_string());
+            }
+            Credentials::PrivateKeyJWT(KeyMaterial::PublicKey { pem }) => {
+                let _ = client_attributes.use_jwks_string.insert(false);
+                let _ = client_attributes.use_jwks_url.insert(false);
+                let _ = client_attributes
+                    .jwt_credential_public_key
+                    .insert(pem.clone());
+            }
+            Credentials::PrivateKeyJWT(KeyMaterial::Jwks { jwks, .. })
+            | Credentials::PrivateKeyJWT(KeyMaterial::PrivateKeyAndJwks { jwks, .. }) => {
+                let _ = client_attributes.use_jwks_string.insert(true);
+                let _ = client_attributes.use_jwks_url.insert(false);
+                let _ = client_attributes.jwks_string.insert(jwks.clone());
+            }
+            Credentials::PrivateKeyJWT(KeyMaterial::JwksUrl { url }) => {
+                let _ = client_attributes.use_jwks_string.insert(false);
+                let _ = client_attributes.use_jwks_url.insert(true);
+                let _ = client_attributes.jwks_url.insert(url.clone());
+            }
+        }
+    }
+
+    let _ = mem::replace(&mut client_repr.attributes, client_attributes.into());
+    if let Some(extra) = extra {
+        client_repr.extend(extra, json.mode());
+    }
+
+    let (name, ctx) = enforce_context(format)?;
+    let (working_realm, mut client) = prepare_client(format, realm.clone(), name, ctx)?;
+
+    if enabled!(Level::DEBUG) {
+        debug!(
+            realm = working_realm,
+            client_id = client_repr.client_id,
+            repr = ?client_repr, "creating client"
+        );
+    }
+    let client_id = client
+        .client_create(&working_realm, client_repr)
+        .inspect_err(|error| {
+            error!(
+                %error,
+                %format,
+                realm = working_realm,
+                "failed to create client"
+            );
+        })?;
+
+    if let Some(credentials) = credentials {
+        match credentials {
+            Credentials::PrivateKeyJWT(key_material) => {
+                key_material.write_out()?;
+            }
+            Credentials::ClientSecretJWT(client_secret)
+            | Credentials::ClientSecretPost(client_secret)
+            | Credentials::ClientSecretBasic(client_secret) => {
+                client_secret.write_out()?;
+            }
+        }
+    }
+
+    if let Some(client_id) = client_id {
+        describe(format, realm, client_id, Default::default())?;
+    } else {
+        out!("resource client created");
+    }
+
+    Ok(())
+}
+
+pub fn delete(yes: bool, realm: Option<String>, client_id: String) -> Result<()> {
+    let format = Default::default();
+    let (name, ctx) = enforce_context(format)?;
+    let (working_realm, mut client) = prepare_client(format, realm.clone(), name, ctx)?;
+
+    if !yes {
+        if !confirm(&format!("delete client \"{client_id}\"?"))? {
+            out!("aborted");
+            return Ok(());
+        }
+    }
+
+    client
+        .client_delete(&working_realm, client_id)
+        .inspect_err(|error| {
+            error!(
+                %error,
+                %format,
+                realm = working_realm,
+                "failed to create client"
+            );
+        })?;
+
+    out!("client deleted");
 
     Ok(())
 }

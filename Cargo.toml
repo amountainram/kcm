@@ -17,23 +17,34 @@ clap = { version = "4.6.0", features = ["derive", "env"] }
 colored = "3.1.1"
 crossterm = "0.29.0"
 dirs = "6.0.0"
+ed25519-dalek = "2.2.0"
 jsonwebtoken = { version = "10.3.0", default-features = false, features = [
     "rust_crypto",
+    "use_pem",
 ] }
 mime = "0.3.17"
+p256 = "0.13.2"
+p384 = "0.13.1"
+pkcs1 = { version = "0.7.5", features = ["pem"] }
 rpassword = "7.4.0"
+rsa = "0.9.10"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
+sha2 = "0.10.9"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 typed-builder = "0.23.2"
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 ureq = { version = "3.3.0", default-features = false, features = [
-    "rustls",
+    "rustls-no-provider",
     "json",
+    "platform-verifier",
 ] }
+uuid = { version = "1.23.0", features = ["v7"] }
+rand = "0.10.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-keyring = { version = "3.6.3", features = ["linux-native", "crypto-rust"] }
+keyring = { version = "3.6.3", features = ["async-secret-service", "crypto-rust"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3.6.3", features = ["apple-native", "crypto-rust"] }

@@ -40,6 +40,7 @@ fn context_action(command: ContextCommands) -> Result<()> {
             name,
             current,
             server_url,
+            admin_server_url,
             realm,
             working_realm,
             username,
@@ -49,6 +50,7 @@ fn context_action(command: ContextCommands) -> Result<()> {
             name,
             current,
             server_url,
+            admin_server_url,
             realm,
             working_realm,
             username,
@@ -59,6 +61,7 @@ fn context_action(command: ContextCommands) -> Result<()> {
             name,
             current,
             server_url,
+            admin_server_url,
             realm,
             working_realm,
             username,
@@ -68,6 +71,7 @@ fn context_action(command: ContextCommands) -> Result<()> {
             name,
             current,
             server_url,
+            admin_server_url,
             realm,
             working_realm,
             username,
@@ -128,6 +132,7 @@ fn clients_action(command: ClientsCommands, cmd_realm: Option<String>) -> Result
             show_credentials,
             realm,
             client_id,
+            all,
         } => commands::clients::describe(
             format,
             exclude_realms(Some(format), cmd_realm, realm)?,
@@ -135,8 +140,38 @@ fn clients_action(command: ClientsCommands, cmd_realm: Option<String>) -> Result
             commands::clients::DescribeOptions::builder()
                 .show_credentials(show_credentials)
                 .jwks(common)
+                .all(all)
                 .build(),
         ),
+        ClientsCommands::Create {
+            common_key,
+            common_secret,
+            json,
+            format,
+            realm,
+            client_id,
+            description,
+            token_auth_method,
+            access_token_lifespan,
+            use_refresh_token,
+        } => {
+            let opts = commands::clients::CreateOptions::builder()
+                .client_id(client_id)
+                .description(description)
+                .access_token_lifespan(access_token_lifespan)
+                .secret_management(common_secret)
+                .key_pair_management(common_key)
+                .token_auth_method(token_auth_method)
+                .use_refresh_token(use_refresh_token)
+                .json_management(json)
+                .build();
+            commands::clients::create(format, realm, opts)
+        }
+        ClientsCommands::Delete {
+            yes,
+            realm,
+            client_id,
+        } => commands::clients::delete(yes, realm, client_id),
     }
 }
 
@@ -144,8 +179,8 @@ fn main() -> ExitCode {
     let Args { command } = Args::parse();
 
     (|| {
-        logger_try_init().inspect_err(|error| {
-            error!(%error, "failed to initialize logger");
+        try_init().inspect_err(|error| {
+            error!(%error, "failed to initialize");
         })?;
 
         let result = match command {
@@ -155,6 +190,18 @@ fn main() -> ExitCode {
         }
         .inspect_err(|error| {
             match error {
+                Error::Conflict => {
+                    out!(
+                        "conflict while creating the resource —  \
+                         resource already exists"
+                    );
+                }
+                Error::NotFound => {
+                    out!(
+                        "failed to execute operation —  \
+                         resource does not exist"
+                    );
+                }
                 Error::ContextAlreadyExists => {
                     out!(
                         "context already exists —  \
@@ -199,8 +246,8 @@ fn main() -> ExitCode {
                 }
                 Error::MustLogin => {
                     out!(
-                        "no token found on current context —  \
-                         use \"authorize login\" to obtain one"
+                        "no valid token found on current context —  \
+                         use \"authorize login\" to obtain one or to refresh"
                     );
                 }
                 Error::JwtMissingKid | Error::JwksMissingKid | Error::JwtDecodingKey => {
@@ -228,7 +275,7 @@ fn main() -> ExitCode {
     .unwrap_or(ExitCode::FAILURE)
 }
 
-fn logger_try_init() -> Result<()> {
+fn try_init() -> Result<()> {
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
     const DEFAULT_MODULE_FILTERS: &str = concat!(
@@ -266,6 +313,10 @@ fn logger_try_init() -> Result<()> {
         .with(tracing_subscriber::EnvFilter::try_from_default_env()?)
         .with(tracing_subscriber::fmt::layer().with_writer(io::stderr))
         .try_init()?;
+
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .map_err(|_| Error::msg("failed to install default crypto provider"))?;
 
     Ok(())
 }
