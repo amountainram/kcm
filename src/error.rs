@@ -8,6 +8,10 @@ pub enum Error {
     Conflict,
     NotFound,
 
+    // daemon
+    TcpListenerBind,
+    ResponseError,
+
     // cli
     InvalidPublicKey,
     MustLogin,
@@ -56,6 +60,8 @@ impl fmt::Display for Error {
         let msg = match self {
             Self::Conflict => "conflict",
             Self::NotFound => "not found",
+            Self::TcpListenerBind => "tcp listener bind",
+            Self::ResponseError => "response error",
             Self::InvalidPublicKey => "invalid public key",
             Self::FileExists => "file exists",
             Self::MustLogin => "must login",

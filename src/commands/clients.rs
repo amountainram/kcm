@@ -1,11 +1,11 @@
-use super::{Context, OutputFormat, Printer, Sensitive, confirm, enforce_context};
+use super::{OutputFormat, Printer, Sensitive, confirm, enforce_context, prepare_client};
 use crate::{
-    Error, Result,
+    Result,
     cli::{
         ClientSecret, ClientSecretManagement, JsonManagement, JwksManagement, KeyMaterial,
         KeyPairManagement, TokenAuthMethod, WriteOutChecks,
     },
-    client::{AdminCliClient, ClientAttributes, ClientRepresentation, settings},
+    client::{ClientAttributes, ClientRepresentation, oauth2, settings},
     out, outfmt,
 };
 use colored::Colorize;
@@ -15,53 +15,6 @@ use std::{
 };
 use tracing::{Level, debug, enabled, error, warn};
 use typed_builder::TypedBuilder;
-
-fn coalesce_realm<'a>(ctx: &'a Context, realm: Option<&'a str>) -> Option<&'a str> {
-    realm.or(ctx.working_realm.as_deref())
-}
-
-fn prepare_client(
-    format: OutputFormat,
-    realm: Option<String>,
-    name: String,
-    ctx: Context,
-) -> Result<(String, AdminCliClient)> {
-    let server_url = match &ctx.server_url {
-        Some(s) => s.clone(),
-        None => {
-            outfmt!(
-                format,
-                "cannot find server-url on current context —  \
-                 use \"context update --server-url <url>\""
-            );
-
-            return Err(Error::MissingArgument);
-        }
-    };
-
-    let realm = match coalesce_realm(&ctx, realm.as_deref()) {
-        Some(r) => r.to_string(),
-        None => {
-            outfmt!(
-                format,
-                "cannot find realm on current context —  \
-                 use \"context update --working-realm <realm>\""
-            );
-
-            return Err(Error::MissingArgument);
-        }
-    };
-
-    Ok((
-        realm,
-        AdminCliClient::builder()
-            .name(name)
-            .server_url(server_url)
-            .admin_server_url(ctx.admin_server_url.clone())
-            .context(ctx)
-            .build(),
-    ))
-}
 
 fn format_client_row(c: &ClientRepresentation) -> String {
     let id = c.client_id.as_deref().unwrap_or("—");
@@ -307,26 +260,26 @@ pub fn describe(
             client_authenticator_type.as_deref(),
             Some(settings::CLIENT_AUTHENTICATOR_TYPE_SECRET)
         ) {
-            token_auth_modes.push("client_secret_basic");
-            token_auth_modes.push("client_secret_post");
+            token_auth_modes.push(oauth2::CLIENT_SECRET_BASIC);
+            token_auth_modes.push(oauth2::CLIENT_SECRET_POST);
         }
         if matches!(
             client_authenticator_type.as_deref(),
             Some(settings::CLIENT_AUTHENTICATOR_TYPE_SECRET_JWT)
         ) {
-            token_auth_modes.push("client_secret_jwt");
+            token_auth_modes.push(oauth2::CLIENT_SECRET_JWT);
         }
         if matches!(
             client_authenticator_type.as_deref(),
             Some(settings::CLIENT_AUTHENTICATOR_TYPE_X509)
         ) {
-            token_auth_modes.push("tls_client_auth");
+            token_auth_modes.push(oauth2::TLS_CLIENT_AUTH);
         }
         if matches!(
             client_authenticator_type.as_deref(),
             Some(settings::CLIENT_AUTHENTICATOR_TYPE_JWT)
         ) {
-            token_auth_modes.push("private_key_jwt");
+            token_auth_modes.push(oauth2::PRIVATE_KEY_JWT);
         }
         if token_auth_modes.is_empty() {
             printer.print_info("[info] token auth", "[none]");
