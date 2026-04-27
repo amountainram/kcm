@@ -29,7 +29,7 @@ fn print_context(name: &str, ctx: &Context, active: bool) {
     }
     out!("    {} {}", "realm:".dimmed(), ctx.realm);
     if let Some(realm) = &ctx.working_realm {
-        out!("    {} {realm}", "working_realm:".dimmed());
+        out!("    {} {realm}", "working-realm:".dimmed());
     }
     if let Some(user) = &ctx.username {
         out!("    {} {user}", "username:".dimmed());
@@ -39,6 +39,9 @@ fn print_context(name: &str, ctx: &Context, active: bool) {
     }
     if let Some(token) = &ctx.token {
         out!("    {} {token}", "token:".dimmed());
+    }
+    if let Some(client_id) = &ctx.client_id {
+        out!("    {} {client_id}", "client-id:".dimmed());
     }
 }
 
@@ -199,6 +202,7 @@ pub fn create(
     username: Option<String>,
     password: Option<String>,
     token: Option<String>,
+    client_id: Option<String>,
 ) -> Result<()> {
     let mut config = load_config()?;
     if config.contexts.contains_key(&name) {
@@ -215,6 +219,7 @@ pub fn create(
         username,
         password: None,
         token: None,
+        client_id,
     };
 
     if let Some(pw) = password {
@@ -243,7 +248,6 @@ pub fn create(
 
 pub fn update(
     name: Option<String>,
-    current: bool,
     server_url: Option<String>,
     admin_server_url: Option<String>,
     realm: Option<String>,
@@ -251,9 +255,10 @@ pub fn update(
     username: Option<String>,
     password: Option<String>,
     token: Option<String>,
+    client_id: Option<String>,
 ) -> Result<()> {
     let Config {
-        mut current_context,
+        current_context,
         mut contexts,
     } = load_config()?;
 
@@ -264,9 +269,6 @@ pub fn update(
     let entry = contexts.get_mut(&name).ok_or(Error::ContextNotFound)?;
     let password = resolve_password(password)?;
 
-    if current {
-        let _ = current_context.insert(name.clone());
-    }
     if let Some(admin_server_url) = admin_server_url {
         let _ = entry.admin_server_url.insert(admin_server_url);
     }
@@ -294,11 +296,61 @@ pub fn update(
         })?;
         entry.set_token(&name, tok)?;
     }
+    if let Some(client_id) = client_id {
+        let _ = entry.client_id.insert(client_id);
+    }
 
     save_config(&Config {
         current_context,
         contexts,
     })?;
+
+    out!("context updated");
+
+    Ok(())
+}
+
+pub fn unset(
+    name: Option<String>,
+    server_url: bool,
+    admin_server_url: bool,
+    working_realm: bool,
+    username: bool,
+    password: bool,
+    token: bool,
+    client_id: bool,
+) -> Result<()> {
+    let Config {
+        current_context,
+        mut contexts,
+    } = load_config()?;
+
+    let name = name
+        .or(current_context.clone())
+        .ok_or(Error::ContextSelection)?;
+
+    let entry = contexts.get_mut(&name).ok_or(Error::ContextNotFound)?;
+    if server_url {
+        let _ = entry.server_url.take();
+    }
+    if admin_server_url {
+        let _ = entry.admin_server_url.take();
+    }
+    if working_realm {
+        let _ = entry.working_realm.take();
+    }
+    if username {
+        let _ = entry.username.take();
+    }
+    if password {
+        entry.delete_password()?
+    }
+    if token {
+        entry.delete_token()?;
+    }
+    if client_id {
+        let _ = entry.client_id.take();
+    }
 
     out!("context updated");
 

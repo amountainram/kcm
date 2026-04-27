@@ -1,4 +1,4 @@
-use crate::{Error, Result, commands::Sensitive, out};
+use crate::{Error, Result, client::oauth2, commands::Sensitive, out};
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 pub use clap::Parser;
 use clap::{Subcommand, ValueEnum};
@@ -13,7 +13,9 @@ use tracing::{debug, error, warn};
 #[derive(Clone, Copy, Default, ValueEnum)]
 pub enum OutputFormat {
     #[default]
+    #[value(name = "plain")]
     Plain,
+    #[value(name = "json")]
     Json,
 }
 
@@ -101,17 +103,6 @@ pub struct JwksManagement {
     jwks_out_overwrite: bool,
 }
 
-#[derive(Clone, Parser, Default)]
-pub struct PrivateKeyManagement {
-    /// Dump Jwks keys (if any) content in the given path.
-    /// A new file will be created if exists
-    #[arg(long = "key-out")]
-    key_out: Option<PathBuf>,
-    /// Overwrites the jwks out file if exists
-    #[arg(long = "key-out-overwrite", default_value = "false")]
-    key_out_overwrite: bool,
-}
-
 impl WriteOutChecks for JwksManagement {
     fn should_write(&self) -> bool {
         self.jwks_out.is_some()
@@ -157,6 +148,84 @@ impl JwksManagement {
         )?;
 
         Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Default, ValueEnum)]
+pub enum KeyAlgorithm {
+    #[value(name = "rsa", alias = "RSA")]
+    RSA,
+    #[value(name = "ec-p256", alias = "EC-P256")]
+    ECP256,
+    #[value(name = "ec-p384", alias = "EC-P384")]
+    ECP384,
+    #[default]
+    #[value(name = "ed25519", alias = "Ed25519", alias = "ED25519")]
+    Ed25519,
+}
+
+impl fmt::Display for KeyAlgorithm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                KeyAlgorithm::RSA => "rsa",
+                KeyAlgorithm::ECP256 => "ec-p256",
+                KeyAlgorithm::ECP384 => "ec-p384",
+                KeyAlgorithm::Ed25519 => "ed25519",
+            }
+        )
+    }
+}
+
+#[derive(Clone, Parser, Default)]
+pub struct PrivateKey {
+    pub algorithm: KeyAlgorithm,
+    out: PathBuf,
+    overwrite: bool,
+}
+
+impl WriteOutChecks for PrivateKey {
+    fn should_write(&self) -> bool {
+        true
+    }
+
+    fn can_write(&self) -> Result<()> {
+        can_write(
+            &self.out,
+            self.overwrite,
+            "--key-out",
+            "--key-out-overwrite",
+        )?;
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Parser, Default)]
+pub struct PrivateKeyManagement {
+    #[arg(long = "key-algorithm")]
+    key_algorithm: Option<KeyAlgorithm>,
+    /// Dump a private key (if any) content in the given path.
+    /// A new file will be created if exists
+    #[arg(long = "key-out")]
+    key_out: Option<PathBuf>,
+    /// Overwrites the private key out file if exists
+    #[arg(long = "key-out-overwrite", default_value = "false")]
+    key_out_overwrite: bool,
+}
+
+impl PrivateKeyManagement {
+    #[allow(unused)]
+    pub fn used(&self) -> Vec<&'static str> {
+        let mut used = vec![];
+
+        if self.key_out.is_some() {
+            used.push("--key-out");
+        }
+
+        used
     }
 }
 
@@ -819,6 +888,9 @@ pub enum ContextCommands {
     Create {
         /// Context name
         name: String,
+        /// Alternative public client for authorization code flow
+        #[arg(long = "client-id")]
+        client_id: Option<String>,
         /// Set to current upon creation
         #[arg(long = "current")]
         current: bool,
@@ -854,9 +926,9 @@ pub enum ContextCommands {
     Update {
         /// Context name (defaults to current)
         name: Option<String>,
-        /// Set to current
-        #[arg(long = "current")]
-        current: bool,
+        /// Alternative public client for authorization code flow
+        #[arg(long = "client-id")]
+        client_id: Option<String>,
         /// Keycloak server base URL
         #[arg(long = "server-url")]
         server_url: Option<String>,
@@ -883,6 +955,33 @@ pub enum ContextCommands {
         /// Access token
         #[arg(long = "token")]
         token: Option<String>,
+    },
+    /// Update an existing context
+    #[command(name = "unset")]
+    Unset {
+        /// Context name (defaults to current)
+        name: Option<String>,
+        /// Alternative public client for authorization code flow
+        #[arg(long = "client-id", default_value_t = false)]
+        client_id: bool,
+        /// Keycloak server base URL
+        #[arg(long = "server-url", default_value_t = false)]
+        server_url: bool,
+        /// Keycloak server base URL
+        #[arg(long = "admin-server-url", default_value_t = false)]
+        admin_server_url: bool,
+        /// Default working realm
+        #[arg(long = "working-realm", default_value_t = false)]
+        working_realm: bool,
+        /// Username
+        #[arg(short = 'u', long = "username", default_value_t = false)]
+        username: bool,
+        /// Password
+        #[arg(short = 'p', long = "password", default_value_t = false)]
+        password: bool,
+        /// Access token
+        #[arg(long = "token", default_value_t = false)]
+        token: bool,
     },
     /// Set the active context
     #[command(name = "use")]
@@ -946,6 +1045,22 @@ pub enum TokenAuthMethod {
     PrivateKeyJWT,
     #[value(name = "tls_client_auth")]
     TlsClientAuth,
+}
+
+impl fmt::Display for TokenAuthMethod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                TokenAuthMethod::ClientSecretBasic => oauth2::CLIENT_SECRET_BASIC,
+                TokenAuthMethod::ClientSecretPost => oauth2::CLIENT_SECRET_POST,
+                TokenAuthMethod::ClientSecretJWT => oauth2::CLIENT_SECRET_JWT,
+                TokenAuthMethod::PrivateKeyJWT => oauth2::PRIVATE_KEY_JWT,
+                TokenAuthMethod::TlsClientAuth => oauth2::TLS_CLIENT_AUTH,
+            }
+        )
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -1112,8 +1227,183 @@ pub enum ClientsCommands {
     },
 }
 
+#[derive(Parser, Default)]
+pub struct Password {
+    out: PathBuf,
+    overwrite: bool,
+}
+
+impl WriteOutChecks for Password {
+    fn should_write(&self) -> bool {
+        true
+    }
+
+    fn can_write(&self) -> Result<()> {
+        can_write(
+            &self.out,
+            self.overwrite,
+            "--password-out",
+            "--password-out-overwrite",
+        )?;
+
+        Ok(())
+    }
+}
+
+impl Password {
+    pub fn write_out<T>(&self, content: T) -> Result<()>
+    where
+        T: AsRef<[u8]>,
+    {
+        write_file(
+            &self.out,
+            self.overwrite,
+            content.as_ref(),
+            "--password-out",
+            "--password-out-overwrite",
+        )?;
+
+        Ok(())
+    }
+}
+
+#[derive(Parser, Default)]
+pub struct PasswordManagement {
+    /// Password for user
+    #[arg(long = "password-out")]
+    password_out: Option<PathBuf>,
+    /// Overwrite existing user password file
+    #[arg(long = "password-out-overwrite", default_value = "false")]
+    password_out_overwrite: bool,
+}
+
+impl PasswordManagement {
+    #[allow(unused)]
+    pub fn used(&self) -> Vec<&'static str> {
+        let mut used = vec![];
+
+        if self.password_out.is_some() {
+            used.push("--password-out");
+        }
+
+        used
+    }
+
+    pub fn to_password(&self) -> Result<Password> {
+        match &self.password_out {
+            None => {
+                out!("argument --password-out must be set");
+
+                Err(Error::MissingArgument)
+            }
+            Some(out) => Ok(Password {
+                out: out.clone(),
+                overwrite: self.password_out_overwrite,
+            }),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default, ValueEnum)]
+pub enum BootstrapAdminPostAction {
+    /// Disables the admin that is currently logged in
+    /// if the new admin username is different from current
+    #[default]
+    #[value(name = "disable-current-admin")]
+    DisableCurrentAdmin,
+    /// Removes the admin that is currently logged in
+    /// if the new admin username is different from current
+    #[value(name = "remove-current-amdin")]
+    RemoveCurrentAdmin,
+    /// Do not do anything
+    #[value(name = "none")]
+    None,
+}
+
+#[derive(Subcommand)]
+pub enum UsersCommands {
+    #[command(name = "list", alias = "ls", alias = "ps")]
+    List {
+        /// Page size for the returned list - format json
+        /// overrides this argument
+        #[arg(
+            short = 'p',
+            long = "page-size",
+            default_value = "10",
+            value_parser = clap::value_parser!(u64).range(1..)
+        )]
+        page_size: u64,
+        /// Output format
+        #[arg(long = "format", default_value = "plain")]
+        format: OutputFormat,
+        /// Working realm
+        #[arg(short = 'r', long = "realm")]
+        realm: Option<String>,
+        /// Search string
+        search: Option<String>,
+    },
+    #[command(name = "describe", alias = "desc", alias = "d")]
+    Describe {
+        /// Output format
+        #[arg(long = "format", default_value = "plain")]
+        format: OutputFormat,
+        /// Working realm
+        #[arg(short = 'r', long = "realm")]
+        realm: Option<String>,
+        /// Username string
+        username: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum BootstrapCommands {
+    /// Resets the password for the admin user,
+    /// if the user does not exists it creates one
+    #[command(name = "admin")]
+    Admin {
+        #[command(flatten)]
+        secret_management: PasswordManagement,
+        #[arg(short = 'u', long = "username")]
+        username: Option<String>,
+        #[arg(long = "then", default_value = "disable-current-admin")]
+        post_action: BootstrapAdminPostAction,
+    },
+    #[command(name = "openid")]
+    Openid {
+        name: String,
+        #[arg(long = "url")]
+        openid_configuration_url: String,
+        #[arg(long = "client-id")]
+        client_id: String,
+        #[arg(long = "display-name")]
+        display_name: Option<String>,
+        #[arg(long = "trust-email")]
+        trust_email: bool,
+        #[arg(long = "organization")]
+        organization: Option<String>,
+        #[arg(long = "vault-key")]
+        vault_key: Option<String>,
+        #[arg(long = "secret")]
+        secret: Option<Sensitive>,
+        #[arg(long = "token-method")]
+        token_method: Option<TokenAuthMethod>,
+        /// Working realm
+        #[arg(short = 'r', long = "realm")]
+        realm: Option<String>,
+    },
+}
+
 #[derive(Subcommand)]
 pub enum Commands {
+    /// Manage CLI contexts
+    #[command(name = "bootstrap")]
+    Bootstrap {
+        #[command(subcommand)]
+        command: BootstrapCommands,
+        /// Working realm
+        #[arg(short = 'r', long = "realm")]
+        realm: Option<String>,
+    },
     /// Manage CLI contexts
     #[command(name = "context", alias = "ctx")]
     Context {
@@ -1131,7 +1421,16 @@ pub enum Commands {
     Clients {
         #[command(subcommand)]
         command: ClientsCommands,
-        /// Login realm
+        /// Working realm
+        #[arg(short = 'r', long = "realm")]
+        realm: Option<String>,
+    },
+    /// Manage realm users
+    #[command(name = "users", alias = "u")]
+    Users {
+        #[command(subcommand)]
+        command: UsersCommands,
+        /// Working realm
         #[arg(short = 'r', long = "realm")]
         realm: Option<String>,
     },

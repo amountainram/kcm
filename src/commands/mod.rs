@@ -1,4 +1,9 @@
-use crate::{Error, Result, cli::OutputFormat, client::AuthAccessToken, out, outfmt};
+use crate::{
+    Error, Result,
+    cli::OutputFormat,
+    client::{AdminCliClient, AuthAccessToken},
+    out, outfmt,
+};
 pub use colored::Color;
 use colored::Colorize;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -13,8 +18,10 @@ use tracing::error;
 use typed_builder::TypedBuilder;
 
 pub mod authorize;
+pub mod bootstrap;
 pub mod clients;
 pub mod context;
+pub mod users;
 
 pub const KCM_CONFIG: &str = "KCM_CONFIG";
 
@@ -54,7 +61,7 @@ where
 }
 
 fn default_auth_realm() -> String {
-    "master".to_string()
+    crate::client::settings::MASTER_REALM.to_string()
 }
 
 #[derive(Default, Clone, Deserialize, Serialize)]
@@ -87,6 +94,8 @@ pub struct Context {
     pub password: Option<Sensitive>,
     #[serde(rename = "token", skip_serializing_if = "Option::is_none")]
     pub token: Option<Sensitive>,
+    #[serde(rename = "client-id", skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
 }
 
 const KEYRING_SERVICE: &str = "kcm";
@@ -134,6 +143,15 @@ impl Context {
         }
     }
 
+    pub fn delete_password(&self) -> Result<()> {
+        if let Some(key_ref) = &self.password {
+            Self::keyring_remove(key_ref.read())
+                .inspect_err(|error| error!(%error, "failed to remove password from OS keyring"))?;
+        }
+
+        Ok(())
+    }
+
     pub fn set_token(&mut self, name: &str, at: &AuthAccessToken) -> Result<()> {
         let value = serde_json::to_string(&at)
             .inspect_err(|error| error!(%error, name, "failed to serialize token"))?;
@@ -179,14 +197,8 @@ impl Context {
     }
 
     pub fn delete_secrets(&self) -> Result<()> {
-        if let Some(key_ref) = &self.password {
-            Self::keyring_remove(key_ref.read())
-                .inspect_err(|error| error!(%error, "failed to remove password from OS keyring"))?;
-        }
-        if let Some(key_ref) = &self.token {
-            Self::keyring_remove(key_ref.read())
-                .inspect_err(|error| error!(%error, "failed to remove token from OS keyring"))?;
-        }
+        self.delete_password()?;
+        self.delete_token()?;
         Ok(())
     }
 }
@@ -357,6 +369,53 @@ fn confirm(message: &str) -> Result<bool> {
         error!(%error, "failed to read confirmation prompt");
     })?;
     Ok(answer.trim().eq_ignore_ascii_case("y"))
+}
+
+fn coalesce_realm<'a>(ctx: &'a Context, realm: Option<&'a str>) -> Option<&'a str> {
+    realm.or(ctx.working_realm.as_deref())
+}
+
+fn prepare_client(
+    format: OutputFormat,
+    realm: Option<String>,
+    name: String,
+    ctx: Context,
+) -> Result<(String, AdminCliClient)> {
+    let server_url = match &ctx.server_url {
+        Some(s) => s.clone(),
+        None => {
+            outfmt!(
+                format,
+                "cannot find server-url on current context —  \
+                 use \"context update --server-url <url>\""
+            );
+
+            return Err(Error::MissingArgument);
+        }
+    };
+
+    let realm = match coalesce_realm(&ctx, realm.as_deref()) {
+        Some(r) => r.to_string(),
+        None => {
+            outfmt!(
+                format,
+                "cannot find realm on current context —  \
+                 use \"context update --working-realm <realm>\""
+            );
+
+            return Err(Error::MissingArgument);
+        }
+    };
+
+    Ok((
+        realm,
+        AdminCliClient::builder()
+            .name(name)
+            .server_url(server_url)
+            .admin_server_url(ctx.admin_server_url.clone())
+            .context(ctx)
+            .build(),
+    ))
 }
 
 const LABEL_WIDTH: usize = 20;

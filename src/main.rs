@@ -1,4 +1,6 @@
-use crate::cli::{AuthorizeCommands, ClientsCommands, OutputFormat};
+use crate::cli::{
+    AuthorizeCommands, BootstrapCommands, ClientsCommands, OutputFormat, UsersCommands,
+};
 use cli::{Args, Commands, ContextCommands, Parser};
 pub use error::{Error, Result};
 use std::{
@@ -38,6 +40,7 @@ fn context_action(command: ContextCommands) -> Result<()> {
     match command {
         ContextCommands::Create {
             name,
+            client_id,
             current,
             server_url,
             admin_server_url,
@@ -56,10 +59,10 @@ fn context_action(command: ContextCommands) -> Result<()> {
             username,
             password,
             token,
+            client_id,
         ),
         ContextCommands::Update {
             name,
-            current,
             server_url,
             admin_server_url,
             realm,
@@ -67,9 +70,9 @@ fn context_action(command: ContextCommands) -> Result<()> {
             username,
             password,
             token,
+            client_id,
         } => commands::context::update(
             name,
-            current,
             server_url,
             admin_server_url,
             realm,
@@ -77,6 +80,26 @@ fn context_action(command: ContextCommands) -> Result<()> {
             username,
             password,
             token,
+            client_id,
+        ),
+        ContextCommands::Unset {
+            name,
+            server_url,
+            admin_server_url,
+            working_realm,
+            username,
+            password,
+            token,
+            client_id,
+        } => commands::context::unset(
+            name,
+            server_url,
+            admin_server_url,
+            working_realm,
+            username,
+            password,
+            token,
+            client_id,
         ),
         ContextCommands::Delete { yes, name } => commands::context::delete(yes, name),
         ContextCommands::Use { name } => commands::context::r#use(name),
@@ -175,6 +198,68 @@ fn clients_action(command: ClientsCommands, cmd_realm: Option<String>) -> Result
     }
 }
 
+fn bootstrap_action(command: BootstrapCommands, cmd_realm: Option<String>) -> Result<()> {
+    match command {
+        BootstrapCommands::Admin {
+            secret_management,
+            username,
+            post_action,
+        } => {
+            let opts = commands::bootstrap::BootstrapAdminOptions::builder()
+                .username(username)
+                .secret_management(secret_management)
+                .post_action(post_action)
+                .build();
+            commands::bootstrap::admin(opts)
+        }
+        BootstrapCommands::Openid {
+            name,
+            client_id,
+            openid_configuration_url,
+            display_name,
+            trust_email,
+            organization,
+            vault_key,
+            secret,
+            token_method,
+            realm,
+        } => {
+            let opts = commands::bootstrap::BootstrapOpenidFederationOptions::builder()
+                .alias(name)
+                .client_id(client_id)
+                .display_name(display_name)
+                .openid_configuration_url(openid_configuration_url)
+                .organization(organization)
+                .secret(secret)
+                .token_method(token_method)
+                .trust_email(trust_email)
+                .vault_key(vault_key)
+                .build();
+            commands::bootstrap::openid_federation(exclude_realms(None, cmd_realm, realm)?, opts)
+        }
+    }
+}
+
+fn users_action(command: UsersCommands, cmd_realm: Option<String>) -> Result<()> {
+    match command {
+        UsersCommands::List {
+            page_size,
+            format,
+            realm,
+            search,
+        } => commands::users::list(page_size, format, realm, search),
+        UsersCommands::Describe {
+            format,
+            realm,
+            username,
+        } => commands::users::get(
+            format,
+            exclude_realms(Some(format), cmd_realm, realm)?,
+            username,
+        ),
+    }
+}
+
 fn main() -> ExitCode {
     let Args { command } = Args::parse();
 
@@ -184,9 +269,11 @@ fn main() -> ExitCode {
         })?;
 
         let result = match command {
+            Commands::Bootstrap { command, realm } => bootstrap_action(command, realm),
             Commands::Context { command } => context_action(command),
             Commands::Authorize { command } => authorize_action(command),
             Commands::Clients { command, realm } => clients_action(command, realm),
+            Commands::Users { command, realm } => users_action(command, realm),
         }
         .inspect_err(|error| {
             match error {
