@@ -46,7 +46,20 @@ fn fmt_relative(secs: i64) -> String {
 pub fn logout(name: Option<String>) -> Result<()> {
     let (name, ctx, mut config) = load_context_or_current(name.as_deref())?;
 
-    ctx.delete_token()?;
+    let server_url = ctx
+        .server_url
+        .clone()
+        .ok_or(Error::ContextMissingServerUrl)?;
+
+    let mut client = AdminCliClient::builder()
+        .name(name)
+        .server_url(server_url.clone())
+        .context(ctx)
+        .build();
+
+    client.logout()?;
+
+    let (name, ctx) = client.consume();
     config.contexts.entry(name).insert_entry(ctx);
 
     out!("logged out!");

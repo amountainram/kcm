@@ -21,6 +21,24 @@ fn print_context(name: &str, ctx: &Context, active: bool) {
     };
     out!("{marker}{label}");
 
+    match ctx.client_id.as_deref() {
+        None | Some("admin-cli") => {
+            out!(
+                "    {}: {} ({})",
+                "client-id".purple().dimmed(),
+                "admin-cli".bold(),
+                "password grant".dimmed()
+            );
+        }
+        Some(client_id) => {
+            out!(
+                "    {}: {} ({})",
+                "client-id".purple().dimmed(),
+                client_id.bold(),
+                "authorization code flow".dimmed()
+            );
+        }
+    }
     if let Some(server) = &ctx.server_url {
         out!("    {} {server}", "server-url:".dimmed());
     }
@@ -39,9 +57,6 @@ fn print_context(name: &str, ctx: &Context, active: bool) {
     }
     if let Some(token) = &ctx.token {
         out!("    {} {token}", "token:".dimmed());
-    }
-    if let Some(client_id) = &ctx.client_id {
-        out!("    {} {client_id}", "client-id:".dimmed());
     }
 }
 
@@ -351,6 +366,11 @@ pub fn unset(
     if client_id {
         let _ = entry.client_id.take();
     }
+
+    save_config(&Config {
+        current_context,
+        contexts,
+    })?;
 
     out!("context updated");
 

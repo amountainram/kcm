@@ -80,6 +80,8 @@ pub struct OpenidConfiguration {
 pub struct AuthAccessToken {
     #[serde(rename = "access_token")]
     pub access_token: String,
+    #[serde(rename = "id_token")]
+    pub id_token: Option<String>,
     #[serde(rename = "expires_in")]
     pub expires_in: i64,
     #[serde(rename = "refresh_expires_in")]

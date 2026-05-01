@@ -207,6 +207,76 @@ impl AdminCliClient {
         })
     }
 
+    pub fn logout(&mut self) -> Result<()> {
+        let client_id = match self.context.client_id.as_deref() {
+            None | Some("admin-cli") => {
+                return Ok(());
+            }
+            Some(x) => x,
+        };
+        let OpenidConfiguration {
+            end_session_endpoint,
+            ..
+        } = self.openid_configuration()?;
+        if let Some(logout_endpoint) = end_session_endpoint {
+            let mut logout_url = url::Url::parse(&logout_endpoint)
+                .inspect_err(|error| error!(%error, logout_endpoint, "invalid logout endpoint"))?;
+            let AuthAccessToken { id_token, .. } = match self.context.get_token()? {
+                Some(x) => x,
+                None => {
+                    return Ok(());
+                }
+            };
+            let (addr_rx, logout_rx, abort_signal_tx) = daemon::launch_logout();
+            let logout_result = (move || {
+                let redirect_uri = addr_rx
+                    .recv()
+                    .inspect_err(|_| {
+                        error!(logout_endpoint, client_id, "logout daemon failed to start")
+                    })
+                    .map_err(Error::from)
+                    .and_then(|x| x)
+                    .map(|x| format!("http://{x}"))?;
+
+                {
+                    let mut qs = logout_url.query_pairs_mut();
+                    if let Some(id_token) = id_token.as_deref() {
+                        qs.append_pair("id_token_hint", id_token);
+                    }
+                    qs.append_pair("client_id", client_id)
+                        .append_pair("post_logout_redirect_uri", &redirect_uri)
+                        .finish();
+                }
+
+                debug!(url = %logout_url, "opening web browser");
+                webbrowser::open(logout_url.as_str()).inspect_err(
+                    |error| error!(%error, url = %logout_url, "failed to open web browser"),
+                )?;
+
+                logout_rx
+                    .recv()
+                    .inspect_err(|_| {
+                        error!(
+                            logout_endpoint,
+                            client_id, "failed to receive logout confirmation from daemon"
+                        )
+                    })
+                    .map_err(Error::from)
+                    .and_then(|x| x)
+            })();
+
+            logout_result
+                .and_then(|_| self.context.delete_token())
+                .inspect_err(|_| {
+                    let _ = abort_signal_tx.send(()).inspect_err(|_| {
+                        error!("failed to abort daemon thread");
+                    });
+                })
+        } else {
+            self.context.delete_token()
+        }
+    }
+
     fn direct_grant_token(
         &self,
         username: &str,
@@ -239,8 +309,7 @@ impl AdminCliClient {
             |error| error!(%error, authorization_endpoint, "invalid authorization endpoint"),
         )?;
 
-        let (abort_signal_tx, abort_signal_rx) = std::sync::mpsc::sync_channel(1);
-        let (addr_rx, code_rx) = daemon::launch(abort_signal_rx);
+        let (addr_rx, code_rx, abort_signal_tx) = daemon::launch_authorize();
         let authorization_code_flow_result = (move || {
             let redirect_uri = addr_rx
                 .recv()
@@ -333,23 +402,24 @@ impl AdminCliClient {
     }
 
     pub fn token(&mut self) -> Result<keycloak::AuthAccessToken> {
-        let res = if let Some(client_id) = &self.context.client_id {
-            self.authorization_code_grant_token(client_id)
-        } else {
-            let username = match &self.context.username {
-                Some(p) => p,
-                None => {
-                    return Err(Error::ContextMissingUsername);
-                }
-            };
-            let password = match self.context.get_password()? {
-                Some(p) => p,
-                None => {
-                    return Err(Error::ContextMissingPassword);
-                }
-            };
+        let res = match self.context.client_id.as_deref() {
+            None | Some("admin-cli") => {
+                let username = match &self.context.username {
+                    Some(p) => p,
+                    None => {
+                        return Err(Error::ContextMissingUsername);
+                    }
+                };
+                let password = match self.context.get_password()? {
+                    Some(p) => p,
+                    None => {
+                        return Err(Error::ContextMissingPassword);
+                    }
+                };
 
-            self.direct_grant_token(username, &password)
+                self.direct_grant_token(username, &password)
+            }
+            Some(client_id) => self.authorization_code_grant_token(client_id),
         }?;
 
         let res = handle_response(res)?;
@@ -481,7 +551,7 @@ fn token_iat(jwt: &str) -> Option<i64> {
 
 mod daemon {
     use crate::{Error, Result};
-    use indoc::indoc;
+    use indoc::formatdoc;
     use serde::Deserialize;
     use std::{
         io,
@@ -512,7 +582,7 @@ mod daemon {
         },
     }
 
-    fn handle_http_request(
+    fn handle_authorize_request(
         stream: &mut TcpStream,
         local_addr: SocketAddr,
     ) -> Result<AuthorizeResponse> {
@@ -542,10 +612,11 @@ mod daemon {
 
         let response = match &result {
             Ok(AuthorizeResponse::Ok { .. }) => {
+                let body = html_ok("Login");
                 format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    HTML_OK.as_bytes().len(),
-                    HTML_OK
+                    body.as_bytes().len(),
+                    body
                 )
             }
             Ok(AuthorizeResponse::Err {
@@ -553,7 +624,7 @@ mod daemon {
                 error_description,
                 ..
             }) => {
-                let body = html_ko(error, error_description.as_deref().unwrap_or(""));
+                let body = html_ko("Login", error, error_description.as_deref().unwrap_or(""));
                 format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     body.as_bytes().len(),
@@ -569,14 +640,78 @@ mod daemon {
         result
     }
 
-    pub fn launch(
-        shutdown: mpsc::Receiver<()>,
-    ) -> (
+    pub fn launch_authorize() -> (
         mpsc::Receiver<Result<SocketAddr>>,
         mpsc::Receiver<Result<AuthorizeResponse>>,
+        mpsc::SyncSender<()>,
     ) {
+        launch(handle_authorize_request)
+    }
+
+    fn handle_logout_request(stream: &mut TcpStream, local_addr: SocketAddr) -> Result<()> {
+        let result = {
+            let mut reader = io::BufReader::new(&mut *stream);
+            let mut request_line = String::new();
+            io::BufRead::read_line(&mut reader, &mut request_line).inspect_err(|error| {
+                error!(%error, "failed to read request line");
+            })?;
+            debug!(
+                request_line = request_line.trim(),
+                "daemon received request"
+            );
+
+            let path = request_line
+                .split_whitespace()
+                .nth(1)
+                .ok_or_else(|| Error::msg("malformed request line"))?;
+            let url = Url::parse(&format!("http://{local_addr}{path}"))
+                .map_err(|_| Error::msg("failed to parse callback URL"))?;
+            let query = url.query().unwrap_or_default();
+            println!("{query}");
+
+            Ok(())
+        };
+
+        let response = match &result {
+            Ok(_) => {
+                let body = html_ok("Logout");
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.as_bytes().len(),
+                    body
+                )
+            }
+            Err(_) => "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n".to_string(),
+        };
+
+        let _ = io::Write::write_all(stream, response.as_bytes());
+        let _ = io::Write::flush(stream);
+
+        result
+    }
+
+    pub fn launch_logout() -> (
+        mpsc::Receiver<Result<SocketAddr>>,
+        mpsc::Receiver<Result<()>>,
+        mpsc::SyncSender<()>,
+    ) {
+        launch(handle_logout_request)
+    }
+
+    fn launch<T, F>(
+        handler: F,
+    ) -> (
+        mpsc::Receiver<Result<SocketAddr>>,
+        mpsc::Receiver<Result<T>>,
+        mpsc::SyncSender<()>,
+    )
+    where
+        T: Send + 'static,
+        F: Fn(&mut TcpStream, SocketAddr) -> Result<T> + Send + 'static,
+    {
         let (local_addr_tx, local_addr_rx) = mpsc::sync_channel(1);
         let (code_tx, code_rx) = mpsc::sync_channel(1);
+        let (shutdown_tx, shutdown_rx) = mpsc::sync_channel(1);
 
         let _ = thread::spawn(move || {
             let _ = local_addr_tx;
@@ -611,17 +746,15 @@ mod daemon {
             for stream in listener.incoming() {
                 match stream {
                     Ok(mut stream) => {
-                        let _ = code_tx.send(handle_http_request(&mut stream, local_addr).map_err(
-                            |error| {
-                                error!(%error, "failed to read incoming stream");
-                                Error::ResponseError
-                            },
-                        ));
+                        let _ = code_tx.send(handler(&mut stream, local_addr).map_err(|error| {
+                            error!(%error, "failed to read incoming stream");
+                            Error::ResponseError
+                        }));
 
                         return;
                     }
                     Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                        if shutdown.try_recv().is_ok() {
+                        if shutdown_rx.try_recv().is_ok() {
                             debug!("daemon received shutdown signal");
                             return;
                         }
@@ -638,64 +771,67 @@ mod daemon {
             }
         });
 
-        (local_addr_rx, code_rx)
+        (local_addr_rx, code_rx, shutdown_tx)
     }
 
-    const HTML_OK: &str = indoc! {r#"
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <title>Login Successful</title>
-            <style>
-                * {
-                    margin:0;
-                    padding:0;
-                    box-sizing:border-box
-                }
-                body {
-                    font-family:-apple-system,system-ui,sans-serif;
-                    display:flex;
-                    align-items:center;
-                    justify-content:center;
-                    min-height:100vh;
-                    background:#0f172a;
-                    color:#e2e8f0
-                }
-                div {
-                    text-align:center;
-                    padding:2rem;
-                    border-radius:1rem;
-                    background:#1e293b;
-                    box-shadow:0 4px 24px rgba(0,0,0,.3)
-                }
-                h1 {
-                    font-size:1.5rem;
-                    margin-bottom:.5rem;
-                    color:#4ade80
-                }
-                p {
-                    color:#94a3b8
-                }
-            </style>
-        </head>
-        <body>
-            <div>
-                <h1>&#10003; Login Successful</h1>
-                <p>This tab will close automatically&hellip;</p>
-            </div>
-            <script>setTimeout(()=>window.close(),1500)</script>
-        </body>
-        </html>
-    "#};
-
-    fn html_ko(error: &str, description: &str) -> String {
-        indoc::formatdoc! {r#"
+    // Most modern browsers prevent scripts from
+    // closing windows they didn't open.
+    fn html_ok(label: &str) -> String {
+        formatdoc! {r#"
             <!DOCTYPE html>
             <html>
             <head>
                 <meta charset="utf-8">
-                <title>Login Failed</title>
+                <title>{label} Successful</title>
+                <style>
+                    * {{
+                        margin:0;
+                        padding:0;
+                        box-sizing:border-box
+                    }}
+                    body {{
+                        font-family:-apple-system,system-ui,sans-serif;
+                        display:flex;
+                        align-items:center;
+                        justify-content:center;
+                        min-height:100vh;
+                        background:#0f172a;
+                        color:#e2e8f0
+                    }}
+                    div {{
+                        text-align:center;
+                        padding:2rem;
+                        border-radius:1rem;
+                        background:#1e293b;
+                        box-shadow:0 4px 24px rgba(0,0,0,.3)
+                    }}
+                    h1 {{
+                        font-size:1.5rem;
+                        margin-bottom:.5rem;
+                        color:#4ade80
+                    }}
+                    p {{
+                        color:#94a3b8
+                    }}
+                </style>
+            </head>
+            <body>
+                <div>
+                    <h1>&#10003; {label} Successful</h1>
+                    <p>You can now close this tab.</p>
+                </div>
+            </body>
+            </html>
+        "#}
+    }
+
+    fn html_ko(label: &str, error: &str, description: &str) -> String {
+        formatdoc! {r#"
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="utf-8">
+                <title>{label} Failed</title>
                 <style>
                     * {{
                         margin:0;
@@ -737,7 +873,7 @@ mod daemon {
             </head>
             <body>
                 <div>
-                    <h1>&#10007; Login Failed</h1>
+                    <h1>&#10007; {label} Failed</h1>
                     <p><code>{error}</code></p>
                     <p>{description}</p>
                 </div>
