@@ -405,5 +405,25 @@ fn try_init() -> Result<()> {
         .install_default()
         .map_err(|_| Error::msg("failed to install default crypto provider"))?;
 
+    keystore::use_native_store()?;
+
     Ok(())
+}
+
+mod keystore {
+    use super::Result;
+
+    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd"))]
+    fn use_zbus_secret_service_store() -> Result<()> {
+        use zbus_secret_service_keyring_store::Store;
+        keyring_core::set_default_store(Store::new()?);
+        Ok(())
+    }
+
+    pub fn use_native_store() -> Result<()> {
+        #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd"))]
+        use_zbus_secret_service_store()?;
+
+        Ok(())
+    }
 }

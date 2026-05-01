@@ -13,7 +13,7 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.102"
 base64 = "0.22.1"
-clap = { version = "4.6.0", features = ["derive", "env"] }
+clap = { version = "4.6.1", features = ["derive", "env"] }
 colored = "3.1.1"
 crossterm = "0.29.0"
 dirs = "6.0.0"
@@ -23,18 +23,19 @@ jsonwebtoken = { version = "10.3.0", default-features = false, features = [
     "rust_crypto",
     "use_pem",
 ] }
+keyring-core = "1.0.0"
 mime = "0.3.17"
 p256 = "0.13.2"
 p384 = "0.13.1"
 pkcs1 = { version = "0.7.5", features = ["pem"] }
 rand = "0.10.1"
-rpassword = "7.4.0"
+rpassword = "7.5.1"
 rsa = "0.9.10"
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 serde_qs = "1.1.1"
-sha2 = "0.10.9"
+sha2 = "0.11.0"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 typed-builder = "0.23.2"
@@ -44,25 +45,22 @@ ureq = { version = "3.3.0", default-features = false, features = [
     "platform-verifier",
 ] }
 url = "2.5.8"
-uuid = { version = "1.23.0", features = ["v7"] }
+uuid = { version = "1.23.1", features = ["v7"] }
 webbrowser = "1.2.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-keyring = { version = "3.6.3", features = [
-    "async-secret-service",
-    "crypto-rust",
-] }
+zbus-secret-service-keyring-store = { version = "1.0.0", features = ["crypto-rust"] }
 
-[target.'cfg(target_os = "macos")'.dependencies]
-keyring = { version = "3.6.3", features = ["apple-native", "crypto-rust"] }
+# [target.'cfg(target_os = "macos")'.dependencies]
+# keyring = { version = "4.0.0", features = ["apple-native", "rust-crypto"] }
 
-[target.'cfg(target_os = "windows")'.dependencies]
-keyring = { version = "3.6.3", features = ["windows-native", "crypto-rust"] }
+# [target.'cfg(target_os = "windows")'.dependencies]
+# keyring = { version = "4.0.0", features = ["windows-native", "rust-crypto"] }
 
 [build-dependencies]
 openapiv3 = "2.2.0"
 schemars = "=0.8.22"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
-typify = "0.6.1"
+typify = "0.6.2"
 ureq = { version = "3.3.0", default-features = false, features = ["rustls"] }

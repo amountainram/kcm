@@ -101,24 +101,24 @@ pub struct Context {
 const KEYRING_SERVICE: &str = "kcm";
 
 impl Context {
-    fn keyring_entry(name: &str, field: &str) -> Result<keyring::Entry> {
+    fn keyring_entry(name: &str, field: &str) -> Result<keyring_core::Entry> {
         let key = format!("{name}/{field}");
-        Ok(keyring::Entry::new(KEYRING_SERVICE, &key)?)
+        Ok(keyring_core::Entry::new(KEYRING_SERVICE, &key)?)
     }
 
     fn keyring_read(key: &str) -> Result<Option<String>> {
-        let entry = keyring::Entry::new(KEYRING_SERVICE, key)?;
+        let entry = keyring_core::Entry::new(KEYRING_SERVICE, key)?;
         match entry.get_password() {
             Ok(s) => Ok(Some(s)),
-            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(keyring_core::Error::NoEntry) => Ok(None),
             Err(e) => Err(Error::from(e)),
         }
     }
 
     fn keyring_remove(key: &str) -> Result<()> {
-        let entry = keyring::Entry::new(KEYRING_SERVICE, key)?;
+        let entry = keyring_core::Entry::new(KEYRING_SERVICE, key)?;
         match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
             Err(e) => Err(Error::from(e)),
         }
     }
