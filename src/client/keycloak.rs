@@ -543,8 +543,8 @@ pub struct ClientAttributes {
 }
 
 impl From<ClientAttributes> for std::collections::HashMap<String, String> {
-    fn from(ref value: ClientAttributes) -> Self {
-        config_to_string_map(value)
+    fn from(value: ClientAttributes) -> Self {
+        config_to_string_map(&value)
     }
 }
 
@@ -685,8 +685,8 @@ pub struct UserAttributes {
 }
 
 impl From<UserAttributes> for std::collections::HashMap<String, Vec<String>> {
-    fn from(ref value: UserAttributes) -> Self {
-        config_to_string_vec_map(value)
+    fn from(value: UserAttributes) -> Self {
+        config_to_string_vec_map(&value)
     }
 }
 
@@ -911,7 +911,7 @@ pub struct IdentityProviderConfig {
 }
 
 impl From<IdentityProviderConfig> for std::collections::HashMap<String, String> {
-    fn from(ref value: IdentityProviderConfig) -> Self {
-        config_to_string_map(value)
+    fn from(value: IdentityProviderConfig) -> Self {
+        config_to_string_map(&value)
     }
 }

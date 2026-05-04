@@ -54,9 +54,7 @@ where
                 %error,
                 "failed to deserialize json"
             );
-        })
-        .map_err(Error::from)
-    } else {
+        })} else {
         Err(Error::msg("response is not json"))
     }
 }
@@ -448,7 +446,7 @@ impl AdminCliClient {
             refresh_expires_in,
             ..
         } = &token;
-        let iat = token_iat(&access_token).unwrap_or(now);
+        let iat = token_iat(access_token).unwrap_or(now);
         if iat + expires_in > now {
             debug!("access token still valid");
             return Ok(token);
@@ -483,7 +481,7 @@ impl AdminCliClient {
                     "client_id",
                     self.context.client_id.as_deref().unwrap_or("admin-cli"),
                 ),
-                ("refresh_token", &refresh_token),
+                ("refresh_token", refresh_token),
             ])
             .inspect_err(|error| error!(%error, endpoint = token_endpoint, "http failure"))?;
         let res = handle_response(res)?;
@@ -615,7 +613,7 @@ mod daemon {
                 let body = html_ok("Login");
                 format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.as_bytes().len(),
+                    body.len(),
                     body
                 )
             }
@@ -627,7 +625,7 @@ mod daemon {
                 let body = html_ko("Login", error, error_description.as_deref().unwrap_or(""));
                 format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.as_bytes().len(),
+                    body.len(),
                     body
                 )
             }
@@ -677,7 +675,7 @@ mod daemon {
                 let body = html_ok("Logout");
                 format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.as_bytes().len(),
+                    body.len(),
                     body
                 )
             }

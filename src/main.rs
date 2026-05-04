@@ -28,7 +28,7 @@ macro_rules! out {
 #[macro_export]
 macro_rules! outfmt {
     ($fmt:ident, $($arg:tt)*) => {{
-        if matches!($fmt, crate::cli::OutputFormat::Json) {
+        if matches!($fmt, $crate::cli::OutputFormat::Json) {
             eprintln!($($arg)*);
         } else {
             println!($($arg)*);
@@ -183,7 +183,7 @@ fn clients_action(command: ClientsCommands, cmd_realm: Option<String>) -> Result
                 .description(description)
                 .access_token_lifespan(access_token_lifespan)
                 .secret_management(common_secret)
-                .key_pair_management(common_key)
+                .key_pair_management(*common_key)
                 .token_auth_method(token_auth_method)
                 .use_refresh_token(use_refresh_token)
                 .json_management(json)
@@ -263,7 +263,7 @@ fn users_action(command: UsersCommands, cmd_realm: Option<String>) -> Result<()>
 fn main() -> ExitCode {
     let Args { command } = Args::parse();
 
-    (|| {
+    if (|| {
         try_init().inspect_err(|error| {
             error!(%error, "failed to initialize");
         })?;
@@ -358,8 +358,11 @@ fn main() -> ExitCode {
         result
     })()
     .is_ok()
-    .then_some(ExitCode::SUCCESS)
-    .unwrap_or(ExitCode::FAILURE)
+    {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
 }
 
 fn try_init() -> Result<()> {

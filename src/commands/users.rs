@@ -22,9 +22,9 @@ macro_rules! print_or {
 fn format_user_row(u: &UserRepresentation) -> String {
     let username = u.username.as_deref().unwrap_or("—");
     let enabled = if u.enabled.unwrap_or_default() {
-        format!("✓").green()
+        "✓".to_string().green()
     } else {
-        format!("✗").red()
+        "✗".to_string().red()
     };
     let email = u.email.as_deref().unwrap_or("—");
     let name = match (&u.first_name, &u.last_name) {
@@ -48,11 +48,11 @@ fn print_users(page: u64, page_size: u64, users: &[UserRepresentation]) {
     if users.len() as u64 == page_size {
         out!(
             "{}{}{}{}{}{}",
-            format!("\n  :").dimmed(),
+            "\n  :".to_string().dimmed(),
             format!(" next page "),
-            format!("|").dimmed(),
+            "|".to_string().dimmed(),
             format!(" "),
-            format!("q").dimmed(),
+            "q".to_string().dimmed(),
             format!("  quit\n")
         );
     }
@@ -67,10 +67,7 @@ fn wait_for_keypress() -> Result<bool> {
     terminal::enable_raw_mode()?;
     let result = loop {
         if let Event::Key(key) = event::read()? {
-            break match key.code {
-                KeyCode::Char('q') | KeyCode::Esc => false,
-                _ => true,
-            };
+            break !matches!(key.code, KeyCode::Char('q') | KeyCode::Esc);
         }
     };
     terminal::disable_raw_mode()?;
@@ -219,7 +216,7 @@ pub fn get(format: OutputFormat, realm: Option<String>, username: String) -> Res
             for fi in &federated_identities {
                 let provider = fi.identity_provider.as_deref().unwrap_or("—");
                 let sub = fi.user_id.as_deref().unwrap_or("—");
-                printer.print_field(&format!("federatedIdentity.{provider}"), sub);
+                printer.print_field(format!("federatedIdentity.{provider}"), sub);
             }
             any = true;
         }

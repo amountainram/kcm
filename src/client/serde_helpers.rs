@@ -47,9 +47,9 @@ pub mod jwks_as_string {
         D: serde::Deserializer<'de>,
     {
         let s = <Option<String> as serde::Deserialize>::deserialize(deserializer)?;
-        Ok(s.map(|s| serde_json::from_str(&s))
+        s.map(|s| serde_json::from_str(&s))
             .transpose()
-            .map_err(<D::Error as serde::de::Error>::custom)?)
+            .map_err(<D::Error as serde::de::Error>::custom)
     }
 
     pub fn serialize<S>(value: &Option<JwkSet>, serializer: S) -> Result<S::Ok, S::Error>
@@ -58,8 +58,7 @@ pub mod jwks_as_string {
     {
         match value.as_ref() {
             Some(set) => {
-                let json_str =
-                    serde_json::to_string(set).map_err(serde::ser::Error::custom)?;
+                let json_str = serde_json::to_string(set).map_err(serde::ser::Error::custom)?;
                 serializer.serialize_str(&json_str)
             }
             None => serializer.serialize_none(),

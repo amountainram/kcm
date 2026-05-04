@@ -207,6 +207,7 @@ pub fn show(format: OutputFormat) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn create(
     name: String,
     current: bool,
@@ -261,6 +262,7 @@ pub fn create(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn update(
     name: Option<String>,
     server_url: Option<String>,
@@ -325,6 +327,7 @@ pub fn update(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn unset(
     name: Option<String>,
     server_url: bool,
@@ -379,11 +382,9 @@ pub fn unset(
 
 pub fn delete(yes: bool, name: String) -> Result<()> {
     let mut config = load_config()?;
-    if !yes {
-        if !confirm(&format!("delete context \"{name}\"?"))? {
-            out!("aborted");
-            return Ok(());
-        }
+    if !yes && !confirm(&format!("delete context \"{name}\"?"))? {
+        out!("aborted");
+        return Ok(());
     }
 
     if config.current_context.as_ref() == Some(&name) {

@@ -19,9 +19,9 @@ use typed_builder::TypedBuilder;
 fn format_client_row(c: &ClientRepresentation) -> String {
     let id = c.client_id.as_deref().unwrap_or("—");
     let enabled = if c.enabled.unwrap_or_default() {
-        format!("✓").green()
+        "✓".to_string().green()
     } else {
-        format!("✗").red()
+        "✗".to_string().red()
     };
     let protocol = c.protocol.as_deref().unwrap_or("—");
     let description = match &c.description {
@@ -44,11 +44,11 @@ fn print_clients(page: u64, page_size: u64, clients: &[ClientRepresentation]) {
     if clients.len() as u64 == page_size {
         out!(
             "{}{}{}{}{}{}",
-            format!("\n  :").dimmed(),
+            "\n  :".to_string().dimmed(),
             format!(" next page "),
-            format!("|").dimmed(),
+            "|".to_string().dimmed(),
             format!(" "),
-            format!("q").dimmed(),
+            "q".to_string().dimmed(),
             format!("  quit\n")
         );
     }
@@ -63,10 +63,7 @@ fn wait_for_keypress() -> Result<bool> {
     terminal::enable_raw_mode()?;
     let result = loop {
         if let Event::Key(key) = event::read()? {
-            break match key.code {
-                KeyCode::Char('q') | KeyCode::Esc => false,
-                _ => true,
-            };
+            break !matches!(key.code, KeyCode::Char('q') | KeyCode::Esc);
         }
     };
     terminal::disable_raw_mode()?;
@@ -487,15 +484,15 @@ enum Credentials {
 }
 
 pub fn create(format: OutputFormat, realm: Option<String>, opts: CreateOptions) -> Result<()> {
-    let json = opts.json_management.into_json()?;
-    let extra = json
-        .used()
-        .then(|| {
-            json.from_value::<ClientRepresentation>().inspect_err(
+    let json = opts.json_management.parse_into_json()?;
+    let extra =
+        json.used()
+            .then(|| {
+                json.parse_from_json_value::<ClientRepresentation>().inspect_err(
                 |error| error!(%error, "failed to deserialize json as client representation"),
             )
-        })
-        .transpose()?;
+            })
+            .transpose()?;
 
     // <= credentials out here
     let credentials = match opts.token_auth_method {
@@ -504,7 +501,11 @@ pub fn create(format: OutputFormat, realm: Option<String>, opts: CreateOptions) 
             if !unused.is_empty() {
                 warn!(
                     "unused parameter{} {}",
-                    (unused.len() == 1).then_some("s").unwrap_or_default(),
+                    if unused.len() == 1 {
+                        "s"
+                    } else {
+                        Default::default()
+                    },
                     unused.join(", ")
                 );
             }
@@ -531,7 +532,11 @@ pub fn create(format: OutputFormat, realm: Option<String>, opts: CreateOptions) 
             if !unused.is_empty() {
                 warn!(
                     "unused parameter{} {}",
-                    (unused.len() == 1).then_some("s").unwrap_or_default(),
+                    if unused.len() == 1 {
+                        "s"
+                    } else {
+                        Default::default()
+                    },
                     unused.join(", ")
                 );
             }
@@ -546,7 +551,11 @@ pub fn create(format: OutputFormat, realm: Option<String>, opts: CreateOptions) 
             if !unused.is_empty() {
                 warn!(
                     "unused parameter{} {}",
-                    (unused.len() == 1).then_some("s").unwrap_or_default(),
+                    if unused.len() == 1 {
+                        "s"
+                    } else {
+                        Default::default()
+                    },
                     unused.join(", ")
                 );
             }
@@ -598,19 +607,19 @@ pub fn create(format: OutputFormat, realm: Option<String>, opts: CreateOptions) 
     if let Some(method) = &credentials {
         match method {
             Credentials::ClientSecretBasic(_) | Credentials::ClientSecretPost(_) => {
-                let _ = client_repr.client_authenticator_type =
+                client_repr.client_authenticator_type =
                     Some(settings::CLIENT_AUTHENTICATOR_TYPE_SECRET.into());
             }
             Credentials::ClientSecretJWT(_) => {
-                let _ = client_repr.client_authenticator_type =
+                client_repr.client_authenticator_type =
                     Some(settings::CLIENT_AUTHENTICATOR_TYPE_SECRET_JWT.into());
-                let _ = client_attributes.token_endpoint_auth_signing_max_exp =
+                client_attributes.token_endpoint_auth_signing_max_exp =
                     Some(DEFAULT_TOKEN_ENDPOINT_AUTH_SIGNING_MAX_EXP.to_string());
             }
             Credentials::PrivateKeyJWT(_) => {
-                let _ = client_repr.client_authenticator_type =
+                client_repr.client_authenticator_type =
                     Some(settings::CLIENT_AUTHENTICATOR_TYPE_JWT.into());
-                let _ = client_attributes.token_endpoint_auth_signing_max_exp =
+                client_attributes.token_endpoint_auth_signing_max_exp =
                     Some(DEFAULT_TOKEN_ENDPOINT_AUTH_SIGNING_MAX_EXP.to_string());
             } // TokenAuthMethod::TlsClientAuth => {
               //     let _ = client_repr.client_authenticator_type =
@@ -704,11 +713,9 @@ pub fn delete(yes: bool, realm: Option<String>, client_id: String) -> Result<()>
     let (name, ctx) = enforce_context(format)?;
     let (working_realm, mut client) = prepare_client(format, realm.clone(), name, ctx)?;
 
-    if !yes {
-        if !confirm(&format!("delete client \"{client_id}\"?"))? {
-            out!("aborted");
-            return Ok(());
-        }
+    if !yes && !confirm(&format!("delete client \"{client_id}\"?"))? {
+        out!("aborted");
+        return Ok(());
     }
 
     client

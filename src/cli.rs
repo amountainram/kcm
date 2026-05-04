@@ -75,9 +75,9 @@ fn write_file(
     fs::create_dir_all(dir).inspect_err(
         |error| error!(path = %print_path(dir), %error, "failed to create file directory"),
     )?;
-    fs::write(&path, content).inspect_err(|error| {
+    fs::write(path, content).inspect_err(|error| {
         error!(
-            path = %print_path(&path),
+            path = %print_path(path),
             %error,
             "failed to write to file",
         )
@@ -154,7 +154,7 @@ impl JwksManagement {
 #[derive(Clone, Copy, Default, ValueEnum)]
 pub enum KeyAlgorithm {
     #[value(name = "rsa", alias = "RSA")]
-    RSA,
+    Rsa,
     #[value(name = "ec-p256", alias = "EC-P256")]
     ECP256,
     #[value(name = "ec-p384", alias = "EC-P384")]
@@ -170,7 +170,7 @@ impl fmt::Display for KeyAlgorithm {
             f,
             "{}",
             match self {
-                KeyAlgorithm::RSA => "rsa",
+                KeyAlgorithm::Rsa => "rsa",
                 KeyAlgorithm::ECP256 => "ec-p256",
                 KeyAlgorithm::ECP384 => "ec-p384",
                 KeyAlgorithm::Ed25519 => "ed25519",
@@ -282,7 +282,7 @@ impl KeyPairManagement {
 }
 
 enum PublicKey {
-    RSA(rsa::RsaPublicKey),
+    Rsa(rsa::RsaPublicKey),
     ECP256(p256::PublicKey),
     ECP384(p384::PublicKey),
     Ed25519(ed25519_dalek::VerifyingKey),
@@ -313,7 +313,7 @@ fn decode_as_public_key(pem_str: &str) -> Result<PublicKey> {
                 )
         })
     {
-        return Ok(PublicKey::RSA(key));
+        return Ok(PublicKey::Rsa(key));
     }
 
     // Try EC P-256
@@ -401,7 +401,7 @@ fn decode_as_public_key_jwks(pem_str: &str) -> Result<jwk::Jwk> {
     };
 
     let jwks = match decode_as_public_key(pem_str)? {
-        PublicKey::RSA(key) => jwk::Jwk {
+        PublicKey::Rsa(key) => jwk::Jwk {
             common,
             algorithm: jwk::AlgorithmParameters::RSA(jwk::RSAKeyParameters {
                 key_type: jwk::RSAKeyType::RSA,
@@ -468,7 +468,7 @@ fn decode_as_public_key_jwks(pem_str: &str) -> Result<jwk::Jwk> {
 
 fn decode_as_public_key_pem(pem_str: &str) -> Result<String> {
     Ok(match decode_as_public_key(pem_str)? {
-        PublicKey::RSA(rsa_public_key) => rsa::pkcs8::EncodePublicKey::to_public_key_pem(
+        PublicKey::Rsa(rsa_public_key) => rsa::pkcs8::EncodePublicKey::to_public_key_pem(
             &rsa_public_key,
             rsa::pkcs8::LineEnding::LF,
         ),
@@ -1089,7 +1089,7 @@ impl Json {
         self.patch_mode
     }
 
-    pub fn from_value<T>(&self) -> Result<T>
+    pub fn parse_from_json_value<T>(&self) -> Result<T>
     where
         for<'de> T: serde::Deserialize<'de>,
     {
@@ -1114,13 +1114,13 @@ pub struct JsonManagement {
 }
 
 impl JsonManagement {
-    pub fn into_json(&self) -> Result<Json> {
+    pub fn parse_into_json(&self) -> Result<Json> {
         let content = match (self.json.as_deref(), self.json_in.as_deref()) {
             (Some(content), path) => {
                 if path.is_some() {
                     warn!("flag --json-in unused");
                 }
-                serde_json::to_value(&content).inspect_err(|error| {
+                serde_json::to_value(content).inspect_err(|error| {
                     error!(%error, "failed to deserialize json");
                 })?
             }
@@ -1187,7 +1187,7 @@ pub enum ClientsCommands {
     #[command(name = "create", alias = "cr")]
     Create {
         #[command(flatten)]
-        common_key: KeyPairManagement,
+        common_key: Box<KeyPairManagement>,
         #[command(flatten)]
         common_secret: ClientSecretManagement,
         #[command(flatten)]

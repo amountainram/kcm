@@ -72,11 +72,18 @@ fn main() {
 
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let keycloak_path = out_dir.join("keycloak.rs");
-    fs::write(&keycloak_path, types_code).expect("failed to write openapi keycloak structs");
+    fs::write(&keycloak_path, &types_code).expect("failed to write openapi keycloak structs");
     std::process::Command::new("rustfmt")
         .arg(&keycloak_path)
         .status()
         .expect("failed to run rustfmt on generated keycloak.rs");
+    // Patch after rustfmt so the allows survive formatting
+    let formatted = fs::read_to_string(&keycloak_path).expect("failed to read formatted file");
+    let patched = formatted.replace(
+        "impl ::std::default::Default for ",
+        "#[allow(clippy::derivable_impls)]\nimpl ::std::default::Default for ",
+    );
+    fs::write(&keycloak_path, patched).expect("failed to write patched keycloak structs");
     fs::write(out_dir.join("keycloak_paths.rs"), paths_code)
         .expect("failed to write openapi keycloak paths");
 }
@@ -191,22 +198,28 @@ fn generate_paths(spec: &OpenAPI) -> String {
                     doc.push_str(&format!("    /// {}\n", line));
                 }
             }
-            if let Some(description) = &op.description {
-                if !description.is_empty() {
-                    if !doc.is_empty() {
-                        doc.push_str("    ///\n");
-                    }
-                    for line in description.trim().lines() {
-                        doc.push_str(&format!("    /// {}\n", line));
-                    }
+            if let Some(description) = &op.description
+                && !description.is_empty()
+            {
+                if !doc.is_empty() {
+                    doc.push_str("    ///\n");
+                }
+                for line in description.trim().lines() {
+                    doc.push_str(&format!("    /// {}\n", line));
                 }
             }
+
+            let body = if params.is_empty() {
+                format!("\"{fmt_path}\".to_string()")
+            } else {
+                format!("format!(\"{fmt_path}\")")
+            };
 
             functions.insert(
                 fn_name.clone(),
                 format!(
                     "{doc}    pub fn {fn_name}({param_args}) -> String {{\n        \
-                     format!(\"{fmt_path}\")\n    }}"
+                     {body}\n    }}"
                 ),
             );
         }

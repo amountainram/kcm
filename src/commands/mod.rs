@@ -180,9 +180,7 @@ impl Context {
             Some(key_ref) => Self::keyring_read(key_ref.read())
                 .inspect_err(|error| {
                     error!(%error, "failed to retrieve token from OS keyring");
-                })
-                .map_err(Error::from)
-                .and_then(|at| match at {
+                }).and_then(|at| match at {
                     None => Ok(None),
                     Some(at) => Ok(Some(
                         serde_json::from_str(&at)
@@ -217,7 +215,7 @@ struct Config {
 }
 
 fn build_config_path() -> Result<PathBuf> {
-    Ok(env::var(KCM_CONFIG)
+    env::var(KCM_CONFIG)
         .map(Into::into)
         .or_else(|e| {
             if matches!(e, env::VarError::NotPresent) {
@@ -238,7 +236,7 @@ fn build_config_path() -> Result<PathBuf> {
                 %error,
                 "failed to parse environment variable"
             );
-        })?)
+        })
 }
 
 fn print_path(path: &Path) -> Cow<'_, str> {
@@ -311,7 +309,7 @@ fn save_config(config: &Config) -> Result<()> {
 fn current_context() -> Result<Option<(String, Context)>> {
     let mut config =
         load_config().inspect_err(|error| error!(%error, "failed to load configuration"))?;
-    Ok(config
+    config
         .current_context
         .map(|name| {
             config
@@ -320,7 +318,7 @@ fn current_context() -> Result<Option<(String, Context)>> {
                 .map(|context| (name.clone(), context))
                 .ok_or_else(|| Error::ContextNotFound)
         })
-        .transpose()?)
+        .transpose()
 }
 
 fn enforce_context(format: OutputFormat) -> Result<(String, Context)> {
