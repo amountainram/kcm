@@ -180,7 +180,8 @@ impl Context {
             Some(key_ref) => Self::keyring_read(key_ref.read())
                 .inspect_err(|error| {
                     error!(%error, "failed to retrieve token from OS keyring");
-                }).and_then(|at| match at {
+                })
+                .and_then(|at| match at {
                     None => Ok(None),
                     Some(at) => Ok(Some(
                         serde_json::from_str(&at)

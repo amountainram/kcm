@@ -54,7 +54,8 @@ where
                 %error,
                 "failed to deserialize json"
             );
-        })} else {
+        })
+    } else {
         Err(Error::msg("response is not json"))
     }
 }
