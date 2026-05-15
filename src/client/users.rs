@@ -40,6 +40,48 @@ impl AdminCliClient {
         })
     }
 
+    pub fn users_list_hint(
+        &mut self,
+        realm: &str,
+        page_size: u64,
+        search: &str,
+    ) -> Result<Vec<keycloak::UserRepresentation>> {
+        let auth_header = self.authorize()?;
+        let endpoint = self.api_endpoint(keycloak::paths::realms_realm_users_get(realm));
+
+        let query = vec![
+            ("max", page_size.to_string()),
+            ("first", 0.to_string()),
+            ("briefRepresentation", "true".to_string()),
+            ("search", search.to_string()),
+            ("exact", "false".to_string()),
+        ];
+        let res = self
+            .agent
+            .get(&endpoint)
+            .query_pairs(query)
+            .header(AUTHORIZATION, auth_header)
+            .call()
+            .inspect_err(|error| error!(%error, endpoint, "http failure"))?;
+        let res = handle_response(res)?;
+        let users = as_json::<Vec<keycloak::UserRepresentation>>(res).inspect_err(|error| {
+            error!(
+                %error,
+                endpoint,
+                "failed to deserialize list of users"
+            );
+        })?;
+        Ok(users
+            .into_iter()
+            .filter(|u| {
+                !u.username
+                    .as_deref()
+                    .unwrap_or("")
+                    .starts_with("service-account-")
+            })
+            .collect())
+    }
+
     pub fn user_describe(
         &mut self,
         realm: &str,
@@ -109,7 +151,12 @@ impl AdminCliClient {
         Ok(())
     }
 
-    pub fn user_set_enabled(&mut self, realm: &str, username: &str, enabled: bool) -> Result<()> {
+    pub fn user_set_activation(
+        &mut self,
+        realm: &str,
+        username: &str,
+        enabled: bool,
+    ) -> Result<()> {
         let user = self
             .user_describe(realm, username)?
             .ok_or(Error::NotFound)?;

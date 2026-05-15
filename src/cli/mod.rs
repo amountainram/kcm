@@ -1,14 +1,26 @@
 use crate::{Error, Result, client::oauth2, commands::Sensitive, out};
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
+pub use bootstrap::{BootstrapAdminPostAction, BootstrapCommands};
 pub use clap::Parser;
 use clap::{Subcommand, ValueEnum};
+pub use clients::ClientsCommands;
+pub use completions::{CompletionsCommands, ShellKind};
+pub use context::ContextCommands;
 use jsonwebtoken::jwk;
+use kcm_derive::Completions;
 use std::{
     borrow::Cow,
     fmt, fs,
     path::{Path, PathBuf},
 };
 use tracing::{debug, error, warn};
+pub use users::UsersCommands;
+
+mod bootstrap;
+mod clients;
+mod completions;
+mod context;
+mod users;
 
 #[derive(Clone, Copy, Default, ValueEnum)]
 pub enum OutputFormat {
@@ -881,140 +893,7 @@ impl ClientSecretManagement {
     }
 }
 
-#[derive(Subcommand)]
-pub enum ContextCommands {
-    /// Create a new context
-    #[command(name = "create", alias = "cr")]
-    Create {
-        /// Context name
-        name: String,
-        /// Alternative public client for authorization code flow
-        #[arg(long = "client-id")]
-        client_id: Option<String>,
-        /// Set to current upon creation
-        #[arg(long = "current")]
-        current: bool,
-        /// Keycloak server base URL
-        #[arg(long = "server-url")]
-        server_url: Option<String>,
-        /// Keycloak server base URL
-        #[arg(long = "admin-server-url")]
-        admin_server_url: Option<String>,
-        /// Authorization realm
-        #[arg(long = "auth-realm")]
-        realm: Option<String>,
-        /// Default working realm
-        #[arg(long = "working-realm")]
-        working_realm: Option<String>,
-        /// Username
-        #[arg(short = 'u', long = "username")]
-        username: Option<String>,
-        /// Password
-        #[arg(
-            short = 'p',
-            long = "password",
-            num_args = 0..=1,
-            default_missing_value = ""
-        )]
-        password: Option<String>,
-        /// Access token
-        #[arg(long = "token")]
-        token: Option<String>,
-    },
-    /// Update an existing context
-    #[command(name = "update", alias = "up")]
-    Update {
-        /// Context name (defaults to current)
-        name: Option<String>,
-        /// Alternative public client for authorization code flow
-        #[arg(long = "client-id")]
-        client_id: Option<String>,
-        /// Keycloak server base URL
-        #[arg(long = "server-url")]
-        server_url: Option<String>,
-        /// Keycloak server base URL
-        #[arg(long = "admin-server-url")]
-        admin_server_url: Option<String>,
-        /// Authorization realm
-        #[arg(long = "auth-realm")]
-        realm: Option<String>,
-        /// Default working realm
-        #[arg(long = "working-realm")]
-        working_realm: Option<String>,
-        /// Username
-        #[arg(short = 'u', long = "username")]
-        username: Option<String>,
-        /// Password
-        #[arg(
-            short = 'p',
-            long = "password",
-            num_args = 0..=1,
-            default_missing_value = ""
-        )]
-        password: Option<String>,
-        /// Access token
-        #[arg(long = "token")]
-        token: Option<String>,
-    },
-    /// Update an existing context
-    #[command(name = "unset")]
-    Unset {
-        /// Context name (defaults to current)
-        name: Option<String>,
-        /// Alternative public client for authorization code flow
-        #[arg(long = "client-id", default_value_t = false)]
-        client_id: bool,
-        /// Keycloak server base URL
-        #[arg(long = "server-url", default_value_t = false)]
-        server_url: bool,
-        /// Keycloak server base URL
-        #[arg(long = "admin-server-url", default_value_t = false)]
-        admin_server_url: bool,
-        /// Default working realm
-        #[arg(long = "working-realm", default_value_t = false)]
-        working_realm: bool,
-        /// Username
-        #[arg(short = 'u', long = "username", default_value_t = false)]
-        username: bool,
-        /// Password
-        #[arg(short = 'p', long = "password", default_value_t = false)]
-        password: bool,
-        /// Access token
-        #[arg(long = "token", default_value_t = false)]
-        token: bool,
-    },
-    /// Set the active context
-    #[command(name = "use")]
-    Use {
-        /// Context name (interactive if omitted)
-        name: Option<String>,
-    },
-    /// Delete a context
-    #[command(name = "delete", alias = "del")]
-    Delete {
-        /// Confirm action
-        #[arg(short = 'y', long = "yes")]
-        yes: bool,
-        /// Context name
-        name: String,
-    },
-    /// List all contexts
-    #[command(name = "list", alias = "ls", alias = "ps")]
-    List {
-        /// Output format
-        #[arg(long = "format", default_value = "plain")]
-        format: OutputFormat,
-    },
-    /// Show the active context
-    #[command(name = "show")]
-    Show {
-        /// Output format
-        #[arg(long = "format", default_value = "plain")]
-        format: OutputFormat,
-    },
-}
-
-#[derive(Subcommand)]
+#[derive(Subcommand, Completions)]
 pub enum AuthorizeCommands {
     #[command(name = "login")]
     Login {
@@ -1143,90 +1022,6 @@ impl JsonManagement {
     }
 }
 
-#[derive(Subcommand)]
-pub enum ClientsCommands {
-    #[command(name = "list", alias = "ls", alias = "ps")]
-    List {
-        /// Page size for the returned list - format json
-        /// overrides this argument
-        #[arg(
-            short = 'p',
-            long = "page-size",
-            default_value = "10",
-            value_parser = clap::value_parser!(u64).range(1..)
-        )]
-        page_size: u64,
-        /// Output format
-        #[arg(long = "format", default_value = "plain")]
-        format: OutputFormat,
-        /// Working realm
-        #[arg(short = 'r', long = "realm")]
-        realm: Option<String>,
-        /// Search string
-        search: Option<String>,
-    },
-    #[command(name = "describe", alias = "desc", alias = "d")]
-    Describe {
-        #[command(flatten)]
-        common: JwksManagement,
-        /// Confirm action
-        #[arg(short = 'a', long = "all")]
-        all: bool,
-        /// Output format
-        #[arg(long = "format", default_value = "plain")]
-        format: OutputFormat,
-        /// Show client secret in plaintext
-        #[arg(long = "show-credentials", default_value = "false")]
-        show_credentials: bool,
-        /// Working realm
-        #[arg(short = 'r', long = "realm")]
-        realm: Option<String>,
-        /// Search string
-        client_id: String,
-    },
-    #[command(name = "create", alias = "cr")]
-    Create {
-        #[command(flatten)]
-        common_key: Box<KeyPairManagement>,
-        #[command(flatten)]
-        common_secret: ClientSecretManagement,
-        #[command(flatten)]
-        json: JsonManagement,
-        /// Output format
-        #[arg(long = "format", default_value = "plain")]
-        format: OutputFormat,
-        /// Working realm
-        #[arg(short = 'r', long = "realm")]
-        realm: Option<String>,
-        /// Client description
-        #[arg(long = "description")]
-        description: Option<String>,
-        /// Authentication method
-        #[arg(long = "token-auth-method", value_enum)]
-        token_auth_method: Option<TokenAuthMethod>,
-        /// Access token lifespan in seconds
-        #[arg(long = "access-token-lifespan")]
-        access_token_lifespan: Option<i64>,
-        /// Client Id
-        client_id: Option<String>,
-        /// Activate refresh token
-        #[arg(long = "use-refresh-token")]
-        use_refresh_token: Option<bool>,
-    },
-    /// Delete a client
-    #[command(name = "delete", alias = "del")]
-    Delete {
-        /// Confirm action
-        #[arg(short = 'y', long = "yes")]
-        yes: bool,
-        /// Working realm
-        #[arg(short = 'r', long = "realm")]
-        realm: Option<String>,
-        /// Client ID
-        client_id: String,
-    },
-}
-
 #[derive(Parser, Default)]
 pub struct Password {
     out: PathBuf,
@@ -1304,96 +1099,7 @@ impl PasswordManagement {
     }
 }
 
-#[derive(Clone, Copy, Default, ValueEnum)]
-pub enum BootstrapAdminPostAction {
-    /// Disables the admin that is currently logged in
-    /// if the new admin username is different from current
-    #[default]
-    #[value(name = "disable-current-admin")]
-    DisableCurrentAdmin,
-    /// Removes the admin that is currently logged in
-    /// if the new admin username is different from current
-    #[value(name = "remove-current-amdin")]
-    RemoveCurrentAdmin,
-    /// Do not do anything
-    #[value(name = "none")]
-    None,
-}
-
-#[derive(Subcommand)]
-pub enum UsersCommands {
-    #[command(name = "list", alias = "ls", alias = "ps")]
-    List {
-        /// Page size for the returned list - format json
-        /// overrides this argument
-        #[arg(
-            short = 'p',
-            long = "page-size",
-            default_value = "10",
-            value_parser = clap::value_parser!(u64).range(1..)
-        )]
-        page_size: u64,
-        /// Output format
-        #[arg(long = "format", default_value = "plain")]
-        format: OutputFormat,
-        /// Working realm
-        #[arg(short = 'r', long = "realm")]
-        realm: Option<String>,
-        /// Search string
-        search: Option<String>,
-    },
-    #[command(name = "describe", alias = "desc", alias = "d")]
-    Describe {
-        /// Output format
-        #[arg(long = "format", default_value = "plain")]
-        format: OutputFormat,
-        /// Working realm
-        #[arg(short = 'r', long = "realm")]
-        realm: Option<String>,
-        /// Username string
-        username: String,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum BootstrapCommands {
-    /// Resets the password for the admin user,
-    /// if the user does not exists it creates one
-    #[command(name = "admin")]
-    Admin {
-        #[command(flatten)]
-        secret_management: PasswordManagement,
-        #[arg(short = 'u', long = "username")]
-        username: Option<String>,
-        #[arg(long = "then", default_value = "disable-current-admin")]
-        post_action: BootstrapAdminPostAction,
-    },
-    #[command(name = "openid")]
-    Openid {
-        name: String,
-        #[arg(long = "url")]
-        openid_configuration_url: String,
-        #[arg(long = "client-id")]
-        client_id: String,
-        #[arg(long = "display-name")]
-        display_name: Option<String>,
-        #[arg(long = "trust-email")]
-        trust_email: bool,
-        #[arg(long = "organization")]
-        organization: Option<String>,
-        #[arg(long = "vault-key")]
-        vault_key: Option<String>,
-        #[arg(long = "secret")]
-        secret: Option<Sensitive>,
-        #[arg(long = "token-method")]
-        token_method: Option<TokenAuthMethod>,
-        /// Working realm
-        #[arg(short = 'r', long = "realm")]
-        realm: Option<String>,
-    },
-}
-
-#[derive(Subcommand)]
+#[derive(Subcommand, Completions)]
 pub enum Commands {
     /// Manage CLI contexts
     #[command(name = "bootstrap")]
@@ -1433,6 +1139,13 @@ pub enum Commands {
         /// Working realm
         #[arg(short = 'r', long = "realm")]
         realm: Option<String>,
+    },
+
+    /// Hidden completion command
+    #[command(name = "completions", hide = true)]
+    Completions {
+        #[command(subcommand)]
+        command: CompletionsCommands,
     },
 }
 

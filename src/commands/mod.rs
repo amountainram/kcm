@@ -417,6 +417,18 @@ fn prepare_client(
     ))
 }
 
+pub fn context_names() -> Vec<String> {
+    load_config()
+        .map(|c| c.contexts.into_keys().collect())
+        .unwrap_or_default()
+}
+
+pub fn in_place(realm: Option<String>) -> Option<(String, AdminCliClient)> {
+    let format = Default::default();
+    let (name, ctx) = enforce_context(format).ok()?;
+    prepare_client(format, realm, name, ctx).ok()
+}
+
 const LABEL_WIDTH: usize = 20;
 
 #[derive(Default, TypedBuilder)]

@@ -6,13 +6,14 @@ pub use error::{Error, Result};
 use std::{
     env,
     io::{self, Write},
-    process::ExitCode,
+    process::{self, ExitCode},
 };
 use tracing::error;
 
 mod cli;
 mod client;
 mod commands;
+mod completions;
 mod error;
 
 #[macro_export]
@@ -257,6 +258,14 @@ fn users_action(command: UsersCommands, cmd_realm: Option<String>) -> Result<()>
             exclude_realms(Some(format), cmd_realm, realm)?,
             username,
         ),
+        UsersCommands::Disable { realm, username } => commands::users::set_activation(
+            exclude_realms(None, cmd_realm, realm)?,
+            username,
+            false,
+        ),
+        UsersCommands::Enable { realm, username } => {
+            commands::users::set_activation(exclude_realms(None, cmd_realm, realm)?, username, true)
+        }
     }
 }
 
@@ -269,6 +278,14 @@ fn main() -> ExitCode {
         })?;
 
         let result = match command {
+            Commands::Completions { command } => match command {
+                cli::CompletionsCommands::Complete { cur, words } => {
+                    completions::complete(&cur, &words);
+                    process::exit(0);
+                }
+                cli::CompletionsCommands::Script { shell } => completions::print_script(shell),
+                cli::CompletionsCommands::Install => completions::install(),
+            },
             Commands::Bootstrap { command, realm } => bootstrap_action(command, realm),
             Commands::Context { command } => context_action(command),
             Commands::Authorize { command } => authorize_action(command),
@@ -277,6 +294,12 @@ fn main() -> ExitCode {
         }
         .inspect_err(|error| {
             match error {
+                Error::UnsupportedShell => {
+                    out!(
+                        "failed to provide autocompletion —  \
+                         shell is not supported"
+                    );
+                }
                 Error::Conflict => {
                     out!(
                         "conflict while creating the resource —  \

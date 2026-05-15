@@ -102,7 +102,7 @@ pub fn admin(opts: BootstrapAdminOptions) -> Result<()> {
         match opts.post_action {
             BootstrapAdminPostAction::DisableCurrentAdmin => {
                 client
-                    .user_set_enabled(&working_realm, &ctx_username, false)
+                    .user_set_activation(&working_realm, &ctx_username, false)
                     .inspect_err(
                         |error| error!(%error, username = %ctx_username, "failed to disable user"),
                     )?;

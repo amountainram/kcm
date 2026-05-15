@@ -285,3 +285,25 @@ pub fn get(format: OutputFormat, realm: Option<String>, username: String) -> Res
 
     Ok(())
 }
+
+pub fn set_activation(realm: Option<String>, username: String, activation: bool) -> Result<()> {
+    let format = Default::default();
+    let (name, ctx) = enforce_context(format)?;
+    let (working_realm, mut client) = prepare_client(format, realm, name, ctx)?;
+
+    client
+        .user_set_activation(&working_realm, &username, activation)
+        .inspect_err(|error| {
+            error!(
+                %error,
+                %format,
+                realm = working_realm,
+                username,
+                "failed to update user"
+            );
+        })?;
+
+    out!("user '{username}' enabled!");
+
+    Ok(())
+}

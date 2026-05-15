@@ -23,6 +23,7 @@ jsonwebtoken = { version = "10.3.0", default-features = false, features = [
     "rust_crypto",
     "use_pem",
 ] }
+kcm-derive.path = "kcm-derive"
 keyring-core = "1.0.0"
 mime = "0.3.17"
 p256 = "0.13.2"

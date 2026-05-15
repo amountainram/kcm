@@ -4,6 +4,9 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Debug)]
 pub enum Error {
+    // completion
+    UnsupportedShell,
+
     // resources
     Conflict,
     NotFound,
@@ -58,6 +61,7 @@ where
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let msg = match self {
+            Self::UnsupportedShell => "unsupported shell",
             Self::Conflict => "conflict",
             Self::NotFound => "not found",
             Self::TcpListenerBind => "tcp listener bind",

@@ -94,4 +94,38 @@ impl AdminCliClient {
 
         Ok(())
     }
+
+    pub fn clients_list_hint(
+        &mut self,
+        realm: &str,
+        page_size: u64,
+        search: &str,
+    ) -> Result<Vec<keycloak::ClientRepresentation>> {
+        let auth_header = self.authorize()?;
+        let endpoint = self.api_endpoint(keycloak::paths::realms_realm_clients_get(realm));
+
+        let mut query = vec![
+            ("max", page_size.to_string()),
+            ("first", 0.to_string()),
+        ];
+        if !search.is_empty() {
+            query.push(("clientId", search.to_string()));
+            query.push(("search", "true".to_string()));
+        }
+        let res = self
+            .agent
+            .get(&endpoint)
+            .query_pairs(query)
+            .header(AUTHORIZATION, auth_header)
+            .call()
+            .inspect_err(|error| error!(%error, endpoint, "http failure"))?;
+        let res = handle_response(res)?;
+        as_json::<Vec<keycloak::ClientRepresentation>>(res).inspect_err(|error| {
+            error!(
+                %error,
+                endpoint,
+                "failed to deserialize list of clients"
+            );
+        })
+    }
 }
