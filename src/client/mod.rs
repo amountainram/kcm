@@ -2,8 +2,8 @@ use crate::{Error, Result, commands::Context};
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 pub use keycloak::{
     AccessToken, AuthAccessToken, ClientAttributes, ClientRepresentation, CredentialRepresentation,
-    IdentityProviderConfig, IdentityProviderRepresentation, OpenidConfiguration, UserAttributes,
-    UserRepresentation, settings,
+    IdentityProviderConfig, IdentityProviderRepresentation, OpenidConfiguration,
+    RealmRepresentation, UserAttributes, UserRepresentation, settings,
 };
 use rand::{TryRng, rngs::SysRng};
 use serde::Deserialize;

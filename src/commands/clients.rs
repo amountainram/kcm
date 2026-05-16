@@ -1,6 +1,6 @@
 use super::{OutputFormat, Printer, Sensitive, confirm, enforce_context, prepare_client};
 use crate::{
-    Result,
+    Error, Result,
     cli::{
         ClientSecret, ClientSecretManagement, JsonManagement, JwksManagement, KeyMaterial,
         KeyPairManagement, TokenAuthMethod, WriteOutChecks,
@@ -704,6 +704,140 @@ pub fn create(format: OutputFormat, realm: Option<String>, opts: CreateOptions) 
     } else {
         out!("resource client created");
     }
+
+    Ok(())
+}
+
+#[derive(TypedBuilder, Default)]
+pub struct UpdateOptions {
+    #[builder(setter(into))]
+    description: Option<String>,
+    access_token_lifespan: Option<i64>,
+    token_auth_method: Option<TokenAuthMethod>,
+    use_refresh_token: Option<bool>,
+    json_management: JsonManagement,
+}
+
+pub fn update(
+    format: OutputFormat,
+    realm: Option<String>,
+    client_id: &str,
+    opts: UpdateOptions,
+) -> Result<()> {
+    let UpdateOptions {
+        description,
+        access_token_lifespan,
+        token_auth_method,
+        use_refresh_token,
+        json_management,
+    } = opts;
+    let json = json_management.parse_into_json()?;
+    let extra =
+        json.used()
+            .then(|| {
+                json.parse_from_json_value::<ClientRepresentation>().inspect_err(
+                |error| error!(%error, "failed to deserialize json as client representation"),
+            )
+            })
+            .transpose()?;
+
+    let (name, ctx) = enforce_context(format)?;
+    let (working_realm, mut client) = prepare_client(format, realm.clone(), name, ctx)?;
+    let _curr_client = client
+        .client_describe(&working_realm, client_id)
+        .inspect_err(|error| {
+            error!(
+                %error,
+                realm = working_realm,
+                client_id,
+                "failed to fetch client description"
+            )
+        })?
+        .ok_or(Error::NotFound)?;
+
+    let mut client_attributes = ClientAttributes::default();
+    if let Some(access_token_lifespan) = access_token_lifespan {
+        let _ = client_attributes
+            .access_token_lifespan
+            .insert(access_token_lifespan);
+    }
+    if let Some(use_refresh_token) = use_refresh_token {
+        let _ = client_attributes
+            .use_refresh_tokens
+            .insert(use_refresh_token);
+    }
+
+    let mut client_repr = ClientRepresentation::default();
+    if let Some(description) = description {
+        let _ = client_repr.description.insert(description);
+    }
+    match token_auth_method {
+        Some(TokenAuthMethod::ClientSecretPost) | Some(TokenAuthMethod::ClientSecretPost) => {
+            let _ = client_repr
+                .client_authenticator_type
+                .insert(settings::CLIENT_AUTHENTICATOR_TYPE_SECRET.to_string());
+        }
+        _ => {}
+    }
+
+    // let curr_token_auth_method = match curr_client.client_authenticator_type.as_deref() {
+    //     None => None,
+    //     Some(settings::CLIENT_AUTHENTICATOR_TYPE_SECRET) => Some(vec![TokenAuthMethod::ClientSecretBasic, TokenAuthMethod::ClientSecretPost]),
+    //     Some(settings::CLIENT_AUTHENTICATOR_TYPE_JWT) => Some(vec![TokenAuthMethod::PrivateKeyJWT]),
+    //     Some(settings::CLIENT_AUTHENTICATOR_TYPE_SECRET_JWT) => Some(vec![TokenAuthMethod::ClientSecretJWT]),
+    //
+    // }
+    // {
+    //     pkce_code_challenge_method: Some(settings::PKCE_CODE_CHALLENGE_METHOD_S256.into()),
+    //     backchannel_logout_session_required: Some(true),
+    //     frontchannel_logout_session_required: Some(true),
+    //     use_refresh_tokens: opts.use_refresh_token.unwrap_or(false).into(),
+    //     use_refresh_token_for_client_credentials_grant: Some(false),
+    //     access_token_lifespan: opts.access_token_lifespan,
+    //     ..Default::default()
+    // };
+    // {
+    //     client_id: opts
+    //         .client_id
+    //         .or_else(|| Some(uuid::Uuid::now_v7().to_string())),
+    //     description: opts.description,
+    //     implicit_flow_enabled: Some(false),
+    //     direct_access_grants_enabled: Some(false),
+    //     direct_grants_only: Some(false),
+    //     enabled: Some(true),
+    //     full_scope_allowed: Some(false),
+    //     default_client_scopes: vec![],
+    //     optional_client_scopes: vec![],
+    //     ..Default::default()
+    // };
+    // if let Some(access_token_lifespan) = access_token_lifespan {
+    // }
+
+    let _ = mem::replace(&mut client_repr.attributes, client_attributes.into());
+    if let Some(extra) = extra {
+        client_repr.extend(extra, json.mode());
+    }
+
+    if enabled!(Level::DEBUG) {
+        debug!(
+            realm = working_realm,
+            client_id = client_repr.client_id,
+            repr = ?client_repr, "updating client"
+        );
+    }
+
+    client
+        .client_update(&working_realm, client_id, client_repr)
+        .inspect_err(|error| {
+            error!(
+                %error,
+                %format,
+                realm = working_realm,
+                "failed to update client"
+            );
+        })?;
+
+    describe(format, realm, client_id.to_string(), Default::default())?;
 
     Ok(())
 }

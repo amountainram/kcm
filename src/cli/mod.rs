@@ -1,4 +1,5 @@
 use crate::{Error, Result, client::oauth2, commands::Sensitive, out};
+pub use authorize::AuthorizeCommands;
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 pub use bootstrap::{BootstrapAdminPostAction, BootstrapCommands};
 pub use clap::Parser;
@@ -8,6 +9,7 @@ pub use completions::{CompletionsCommands, ShellKind};
 pub use context::ContextCommands;
 use jsonwebtoken::jwk;
 use kcm_derive::Completions;
+pub use realms::RealmsCommands;
 use std::{
     borrow::Cow,
     fmt, fs,
@@ -16,10 +18,12 @@ use std::{
 use tracing::{debug, error, warn};
 pub use users::UsersCommands;
 
+mod authorize;
 mod bootstrap;
 mod clients;
 mod completions;
 mod context;
+mod realms;
 mod users;
 
 #[derive(Clone, Copy, Default, ValueEnum)]
@@ -893,25 +897,6 @@ impl ClientSecretManagement {
     }
 }
 
-#[derive(Subcommand, Completions)]
-pub enum AuthorizeCommands {
-    #[command(name = "login")]
-    Login {
-        /// Name of the context
-        context: Option<String>,
-    },
-    #[command(name = "logout")]
-    Logout {
-        /// Name of the context
-        context: Option<String>,
-    },
-    #[command(name = "status")]
-    Status {
-        /// Name of the context
-        context: Option<String>,
-    },
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum TokenAuthMethod {
     #[value(name = "client_secret_basic")]
@@ -1139,6 +1124,12 @@ pub enum Commands {
         /// Working realm
         #[arg(short = 'r', long = "realm")]
         realm: Option<String>,
+    },
+    /// Manage realms
+    #[command(name = "realms", alias = "r")]
+    Realms {
+        #[command(subcommand)]
+        command: RealmsCommands,
     },
 
     /// Hidden completion command

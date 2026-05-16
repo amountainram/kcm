@@ -21,6 +21,7 @@ pub mod authorize;
 pub mod bootstrap;
 pub mod clients;
 pub mod context;
+pub mod realms;
 pub mod users;
 
 pub const KCM_CONFIG: &str = "KCM_CONFIG";

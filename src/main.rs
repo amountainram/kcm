@@ -1,5 +1,6 @@
 use crate::cli::{
-    AuthorizeCommands, BootstrapCommands, ClientsCommands, OutputFormat, UsersCommands,
+    AuthorizeCommands, BootstrapCommands, ClientsCommands, OutputFormat, RealmsCommands,
+    UsersCommands,
 };
 use cli::{Args, Commands, ContextCommands, Parser};
 pub use error::{Error, Result};
@@ -189,13 +190,41 @@ fn clients_action(command: ClientsCommands, cmd_realm: Option<String>) -> Result
                 .use_refresh_token(use_refresh_token)
                 .json_management(json)
                 .build();
-            commands::clients::create(format, realm, opts)
+            commands::clients::create(
+                format,
+                exclude_realms(Some(format), cmd_realm, realm)?,
+                opts,
+            )
+        }
+        ClientsCommands::Update {
+            client_id,
+            json,
+            format,
+            realm,
+            description,
+            token_auth_method,
+            access_token_lifespan,
+            use_refresh_token,
+        } => {
+            let opts = commands::clients::UpdateOptions::builder()
+                .description(description)
+                .access_token_lifespan(access_token_lifespan)
+                .token_auth_method(token_auth_method)
+                .use_refresh_token(use_refresh_token)
+                .json_management(json)
+                .build();
+            commands::clients::update(
+                format,
+                exclude_realms(Some(format), cmd_realm, realm)?,
+                &client_id,
+                opts,
+            )
         }
         ClientsCommands::Delete {
             yes,
             realm,
             client_id,
-        } => commands::clients::delete(yes, realm, client_id),
+        } => commands::clients::delete(yes, exclude_realms(None, cmd_realm, realm)?, client_id),
     }
 }
 
@@ -269,6 +298,17 @@ fn users_action(command: UsersCommands, cmd_realm: Option<String>) -> Result<()>
     }
 }
 
+fn realms_action(command: RealmsCommands) -> Result<()> {
+    match command {
+        RealmsCommands::List {
+            page_size,
+            format,
+            search,
+        } => commands::realms::list(page_size, format, search),
+        RealmsCommands::Describe { format, realm } => commands::realms::get(format, realm),
+    }
+}
+
 fn main() -> ExitCode {
     let Args { command } = Args::parse();
 
@@ -291,6 +331,7 @@ fn main() -> ExitCode {
             Commands::Authorize { command } => authorize_action(command),
             Commands::Clients { command, realm } => clients_action(command, realm),
             Commands::Users { command, realm } => users_action(command, realm),
+            Commands::Realms { command } => realms_action(command),
         }
         .inspect_err(|error| {
             match error {

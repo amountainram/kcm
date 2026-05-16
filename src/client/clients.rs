@@ -70,6 +70,36 @@ impl AdminCliClient {
         Ok(body.client_id)
     }
 
+    pub fn client_update(
+        &mut self,
+        realm: &str,
+        client_id: &str,
+        body: keycloak::ClientRepresentation,
+    ) -> Result<()> {
+        let id = self
+            .client_describe(realm, client_id)?
+            .and_then(|keycloak::ClientRepresentation { id, .. }| id)
+            .ok_or(Error::NotFound)?;
+
+        let auth_header = self.authorize()?;
+
+        let endpoint = self.api_endpoint(keycloak::paths::realms_realm_clients_client_uuid_put(
+            realm, &id,
+        ));
+        let res = self
+            .agent
+            .put(&endpoint)
+            .header(AUTHORIZATION, auth_header)
+            .send_json(&body)
+            .inspect_err(|error| error!(%error, endpoint, "http failure"))?;
+        handle_response(res).map_err(|error| {
+            error!(%error, "failed to create client");
+            Error::Conflict
+        })?;
+
+        Ok(())
+    }
+
     pub fn client_delete(&mut self, realm: &str, client_id: String) -> Result<()> {
         let auth_header = self.authorize()?;
 
@@ -104,10 +134,7 @@ impl AdminCliClient {
         let auth_header = self.authorize()?;
         let endpoint = self.api_endpoint(keycloak::paths::realms_realm_clients_get(realm));
 
-        let mut query = vec![
-            ("max", page_size.to_string()),
-            ("first", 0.to_string()),
-        ];
+        let mut query = vec![("max", page_size.to_string()), ("first", 0.to_string())];
         if !search.is_empty() {
             query.push(("clientId", search.to_string()));
             query.push(("search", "true".to_string()));

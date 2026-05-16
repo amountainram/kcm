@@ -76,6 +76,34 @@ pub enum ClientsCommands {
         #[arg(long = "use-refresh-token")]
         use_refresh_token: Option<bool>,
     },
+    /// Update a client
+    #[command(name = "update", alias = "up")]
+    Update {
+        /// Client Id
+        #[completion(values = "complete_client_ids")]
+        client_id: String,
+        /// Extra options as json client representation
+        #[command(flatten)]
+        json: JsonManagement,
+        /// Output format
+        #[arg(long = "format", default_value = "plain")]
+        format: OutputFormat,
+        /// Working realm
+        #[arg(short = 'r', long = "realm")]
+        realm: Option<String>,
+        /// Client description
+        #[arg(long = "description")]
+        description: Option<String>,
+        /// Authentication method
+        #[arg(long = "token-auth-method", value_enum)]
+        token_auth_method: Option<TokenAuthMethod>,
+        /// Access token lifespan in seconds
+        #[arg(long = "access-token-lifespan")]
+        access_token_lifespan: Option<i64>,
+        /// Activate refresh token
+        #[arg(long = "use-refresh-token")]
+        use_refresh_token: Option<bool>,
+    },
     /// Delete a client
     #[command(name = "delete", alias = "del")]
     Delete {
