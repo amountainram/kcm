@@ -278,7 +278,7 @@ pub fn describe(
         ) {
             token_auth_modes.push(oauth2::PRIVATE_KEY_JWT);
         }
-        if token_auth_modes.is_empty() {
+        if public_client.unwrap_or_default() || token_auth_modes.is_empty() {
             printer.print_info("[info] token auth", "[none]");
         } else {
             printer.print_info(
@@ -322,12 +322,14 @@ pub fn describe(
                 Some(false) | None => colored::Color::Green,
             }
         );
-        print_or!(
-            any,
-            printer,
-            "clientAuthenticatorType",
-            client_authenticator_type.clone()
-        );
+        if !public_client.unwrap_or_default() {
+            print_or!(
+                any,
+                printer,
+                "clientAuthenticatorType",
+                client_authenticator_type.clone()
+            );
+        }
         print_or!(any, printer, "standardFlowEnabled", standard_flow_enabled);
         print_or!(any, printer, "implicitFlowEnabled", implicit_flow_enabled);
         print_or!(
