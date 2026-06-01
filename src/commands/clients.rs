@@ -781,7 +781,7 @@ pub fn update(
         let _ = client_repr.description.insert(description);
     }
     match token_auth_method {
-        Some(TokenAuthMethod::ClientSecretPost) | Some(TokenAuthMethod::ClientSecretPost) => {
+        Some(TokenAuthMethod::ClientSecretPost) | Some(TokenAuthMethod::ClientSecretBasic) => {
             let _ = client_repr
                 .client_authenticator_type
                 .insert(settings::CLIENT_AUTHENTICATOR_TYPE_SECRET.to_string());
