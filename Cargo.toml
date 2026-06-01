@@ -50,13 +50,15 @@ uuid = { version = "1.23.1", features = ["v7"] }
 webbrowser = "1.2.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-zbus-secret-service-keyring-store = { version = "1.0.0", features = ["crypto-rust"] }
+zbus-secret-service-keyring-store = { version = "1.0.0", features = [
+    "crypto-rust",
+] }
 
 # [target.'cfg(target_os = "macos")'.dependencies]
 # keyring = { version = "4.0.0", features = ["apple-native", "rust-crypto"] }
 
-# [target.'cfg(target_os = "windows")'.dependencies]
-# keyring = { version = "4.0.0", features = ["windows-native", "rust-crypto"] }
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-native-keyring-store = "1.1.0"
 
 [build-dependencies]
 openapiv3 = "2.2.0"

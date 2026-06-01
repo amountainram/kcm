@@ -61,6 +61,13 @@ fn wait_for_keypress() -> Result<bool> {
     };
 
     terminal::enable_raw_mode()?;
+
+    // Drain any pending events on Windows
+    #[cfg(target_os = "windows")]
+    while event::poll(std::time::Duration::ZERO)? {
+        let _ = event::read()?;
+    }
+
     let result = loop {
         if let Event::Key(key) = event::read()? {
             break !matches!(key.code, KeyCode::Char('q') | KeyCode::Esc);

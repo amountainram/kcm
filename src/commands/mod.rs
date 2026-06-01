@@ -100,6 +100,11 @@ pub struct Context {
 }
 
 const KEYRING_SERVICE: &str = "kcm";
+/// Windows native store allows max 2560 bytes
+/// in UTF-16 for password storage and access_token
+/// bundles may often exceed that size
+#[cfg(target_os = "windows")]
+const KEYRING_CHUNK_SIZE: usize = 1200;
 
 impl Context {
     fn keyring_entry(name: &str, field: &str) -> Result<keyring_core::Entry> {
@@ -156,21 +161,81 @@ impl Context {
     pub fn set_token(&mut self, name: &str, at: &AuthAccessToken) -> Result<()> {
         let value = serde_json::to_string(&at)
             .inspect_err(|error| error!(%error, name, "failed to serialize token"))?;
-        let entry = Self::keyring_entry(name, "token").inspect_err(
-            |error| error!(%error, name, "failed to reserve token entry in OS keyring"),
-        )?;
-        entry
-            .set_password(&value)
-            .inspect_err(|error| error!(%error, name, "failed to store token in OS keyring"))?;
-        self.token = Some(Sensitive::from(format!("{name}/token")));
+
+        // Remove old chunks before writing new ones
+        self.delete_token()?;
+
+        #[cfg(target_os = "windows")]
+        {
+            let chunks: Vec<&[u8]> = value.as_bytes().chunks(KEYRING_CHUNK_SIZE).collect();
+            let num_chunks = chunks.len();
+
+            for (i, chunk) in chunks.iter().enumerate() {
+                let field = if num_chunks == 1 {
+                    "token".to_string()
+                } else {
+                    format!("token.{i}")
+                };
+                let chunk_str = std::str::from_utf8(chunk)
+                    .map_err(|e| Error::msg(format!("token chunk is not valid UTF-8: {e}")))?;
+                let entry = Self::keyring_entry(name, &field).inspect_err(
+                    |error| error!(%error, name, field, "failed to reserve token entry in OS keyring"),
+                )?;
+                entry.set_password(chunk_str).inspect_err(
+                    |error| error!(%error, name, field, "failed to store token in OS keyring"),
+                )?;
+            }
+
+            let ref_value = if num_chunks == 1 {
+                format!("{name}/token")
+            } else {
+                format!("{name}/token#{num_chunks}")
+            };
+            self.token = Some(Sensitive::from(ref_value));
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let entry = Self::keyring_entry(name, "token").inspect_err(
+                |error| error!(%error, name, "failed to reserve token entry in OS keyring"),
+            )?;
+            entry
+                .set_password(&value)
+                .inspect_err(|error| error!(%error, name, "failed to store token in OS keyring"))?;
+            self.token = Some(Sensitive::from(format!("{name}/token")));
+        }
 
         Ok(())
     }
 
     pub fn delete_token(&self) -> Result<()> {
         if let Some(key_ref) = &self.token {
-            Self::keyring_remove(key_ref.read())
-                .inspect_err(|error| error!(%error, "failed to remove token from OS keyring"))?;
+            #[cfg(target_os = "windows")]
+            {
+                let raw = key_ref.read();
+                let (base, num_chunks) = match raw.rsplit_once('#') {
+                    Some((base, n)) => (base, n.parse::<usize>().unwrap_or(1)),
+                    None => (raw.as_str(), 1),
+                };
+                if num_chunks <= 1 {
+                    Self::keyring_remove(base).inspect_err(
+                        |error| error!(%error, "failed to remove token from OS keyring"),
+                    )?;
+                } else {
+                    for i in 0..num_chunks {
+                        let chunk_key = format!("{base}.{i}");
+                        Self::keyring_remove(&chunk_key)
+                            .inspect_err(|error| error!(%error, chunk_key, "failed to remove token chunk from OS keyring"))?;
+                    }
+                }
+            }
+
+            #[cfg(not(target_os = "windows"))]
+            {
+                Self::keyring_remove(key_ref.read()).inspect_err(
+                    |error| error!(%error, "failed to remove token from OS keyring"),
+                )?;
+            }
         }
 
         Ok(())
@@ -178,11 +243,40 @@ impl Context {
 
     pub fn get_token(&self) -> Result<Option<AuthAccessToken>> {
         match &self.token {
-            Some(key_ref) => Self::keyring_read(key_ref.read())
-                .inspect_err(|error| {
+            Some(key_ref) => {
+                #[cfg(target_os = "windows")]
+                let combined = {
+                    let raw = key_ref.read();
+                    let (base, num_chunks) = match raw.rsplit_once('#') {
+                        Some((base, n)) => (base, n.parse::<usize>().unwrap_or(1)),
+                        None => (raw.as_str(), 1),
+                    };
+
+                    if num_chunks <= 1 {
+                        Self::keyring_read(base).inspect_err(|error| {
+                            error!(%error, "failed to retrieve token from OS keyring");
+                        })?
+                    } else {
+                        let mut parts = Vec::with_capacity(num_chunks);
+                        for i in 0..num_chunks {
+                            let chunk_key = format!("{base}.{i}");
+                            match Self::keyring_read(&chunk_key).inspect_err(|error| {
+                                error!(%error, chunk_key, "failed to retrieve token chunk from OS keyring");
+                            })? {
+                                Some(part) => parts.push(part),
+                                None => return Ok(None),
+                            }
+                        }
+                        Some(parts.join(""))
+                    }
+                };
+
+                #[cfg(not(target_os = "windows"))]
+                let combined = Self::keyring_read(key_ref.read()).inspect_err(|error| {
                     error!(%error, "failed to retrieve token from OS keyring");
-                })
-                .and_then(|at| match at {
+                })?;
+
+                match combined {
                     None => Ok(None),
                     Some(at) => Ok(Some(
                         serde_json::from_str(&at)
@@ -191,7 +285,8 @@ impl Context {
                             })
                             .map_err(Error::from)?,
                     )),
-                }),
+                }
+            }
             None => Ok(None),
         }
     }

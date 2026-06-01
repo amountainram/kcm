@@ -487,9 +487,19 @@ mod keystore {
         Ok(())
     }
 
+    #[cfg(target_os = "windows")]
+    fn use_windows_native_store() -> Result<()> {
+        use windows_native_keyring_store::Store;
+        keyring_core::set_default_store(Store::new()?);
+        Ok(())
+    }
+
     pub fn use_native_store() -> Result<()> {
         #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd"))]
         use_zbus_secret_service_store()?;
+
+        #[cfg(target_os = "windows")]
+        use_windows_native_store()?;
 
         Ok(())
     }
